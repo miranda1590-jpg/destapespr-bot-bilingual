@@ -10,10 +10,10 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 const PORT = process.env.PORT || 10000;
-const TAG = '[[BILINGUAL-V3]]';
+const TAG = '[[BILINGUAL-V3.2]]';
 
 // =====================
-// TEXTOS / MENÚ
+// TEXTOS BASE
 // =====================
 const CIERRE_ES = `
 ✅ Próximamente nos estaremos comunicando.
@@ -33,6 +33,7 @@ Escribe el número o la palabra del servicio que necesitas:
 3 - Cámara (inspección con cámara)
 4 - Calentador (gas o eléctrico)
 5 - Otro (otro tipo de servicio)
+6 - Cita (coordinar cita directamente)
 
 Comandos: "inicio", "menu" o "volver" para regresar al menú.
 Para inglés, escribe "english" o "menu en".`;
@@ -46,13 +47,14 @@ Type the number or the word of the service you need:
 3 - Camera (video inspection)
 4 - Heater (gas or electric)
 5 - Other (other service)
+6 - Appointment (schedule directly)
 
 Commands: "menu" or "back" to return to the menu.
 For Spanish, type "espanol" or "menu es".`;
 
-const OPCIONES = { '1': 'destape', '2': 'fuga', '3': 'camara', '4': 'calentador', '5': 'otro' };
+const OPCIONES = { '1': 'destape', '2': 'fuga', '3': 'camara', '4': 'calentador', '5': 'otro', '6': 'cita' };
 
-// —— Bloque de formulario ES/EN (misma estructura para todas las opciones)
+// — Formulario común
 const FORM_ES = `Vamos a coordinar tu cita. Por favor indícame zona (municipio/sector), el servicio que necesitas y disponibilidad.${CIERRE_ES}
 
 Por favor envía en un solo mensaje:
@@ -77,51 +79,37 @@ Example:
 
 (Type "back" to return to the menu)`;
 
-// —— Descripciones por servicio (ES/EN) + formulario
+// — Descripciones por servicio (sin enlace de cita en 1–5; solo 6 lo tiene)
 const RESP_ES = {
-  destape:
-    `Opción: Destape \n` +
-    `Descripción: trabajamos fregaderos, inodoros, duchas y línea principal. También destapamos lavamanos, bañeras y desagües pluviales.\n\n` +
-    FORM_ES,
-  fuga:
-    `Opción: Fuga \n` +
-    `Descripción: localizamos y reparamos salideros, filtraciones y goteos. Orientación sobre humedad en paredes, techos o patios.\n\n` +
-    FORM_ES,
-  camara:
-    `Opción: Cámara (inspección) \n` +
-    `Descripción: inspección con video para detectar roturas, raíces u obstrucciones; se puede documentar con evidencia.\n\n` +
-    FORM_ES,
-  calentador:
-    `Opción: Calentador \n` +
-    `Descripción: diagnóstico y corrección en calentadores eléctricos o de gas (termostato, resistencia, ignición/piloto, fugas).\n\n` +
-    FORM_ES,
-  otro:
-    `Opción: Otro servicio \n` +
-    `Descripción: cuéntanos tu necesidad (instalaciones, mantenimiento, cotizaciones, etc.).\n\n` +
-    FORM_ES,
+  destape: `Opción: Destape 
+Descripción: trabajamos fregaderos, inodoros, duchas y línea principal. También destapamos lavamanos, bañeras y desagües pluviales.\n\n${FORM_ES}`,
+  fuga: `Opción: Fuga 
+Descripción: localizamos y reparamos salideros, filtraciones y goteos. Orientación sobre humedad en paredes, techos o patios.\n\n${FORM_ES}`,
+  camara: `Opción: Cámara (inspección) 
+Descripción: inspección con video para detectar roturas, raíces u obstrucciones; se puede documentar con evidencia.\n\n${FORM_ES}`,
+  calentador: `Opción: Calentador 
+Descripción: diagnóstico y corrección en calentadores eléctricos o de gas (termostato, resistencia, ignición/piloto, fugas).\n\n${FORM_ES}`,
+  otro: `Opción: Otro servicio 
+Descripción: cuéntanos tu necesidad (instalaciones, mantenimiento, cotizaciones, etc.).\n\n${FORM_ES}`,
+  cita: `Opción: Cita 
+Para coordinar tu cita ahora, envía tu nombre, número y horario disponible. También puedes hacerlo directamente en WhatsApp: 
+📅 https://wa.me/17879220068?text=Quiero%20agendar%20una%20cita${CIERRE_ES}`,
 };
 
 const RESP_EN = {
-  destape:
-    `Option: Unclog \n` +
-    `Description: we handle sinks, toilets, showers, and the main line; also lavatories, bathtubs, and storm drains.\n\n` +
-    FORM_EN,
-  fuga:
-    `Option: Leak \n` +
-    `Description: we detect and repair water leaks, drips, and seepage; guidance for damp walls/ceilings/yards.\n\n` +
-    FORM_EN,
-  camara:
-    `Option: Camera (inspection) \n` +
-    `Description: video inspection to find breaks, roots, or blockages; optional photo/video documentation.\n\n` +
-    FORM_EN,
-  calentador:
-    `Option: Heater \n` +
-    `Description: diagnosis and fix for electric/gas water heaters (thermostat, element, ignition/pilot, leaks).\n\n` +
-    FORM_EN,
-  otro:
-    `Option: Other \n` +
-    `Description: tell us your need (installations, maintenance, quotes, etc.).\n\n` +
-    FORM_EN,
+  destape: `Option: Unclog 
+Description: we handle sinks, toilets, showers, and the main line; also lavatories, bathtubs, and storm drains.\n\n${FORM_EN}`,
+  fuga: `Option: Leak 
+Description: we detect and repair water leaks, drips, and seepage; guidance for damp walls/ceilings/yards.\n\n${FORM_EN}`,
+  camara: `Option: Camera (inspection) 
+Description: video inspection to find breaks, roots, or blockages; optional photo/video documentation.\n\n${FORM_EN}`,
+  calentador: `Option: Heater 
+Description: diagnosis and fix for electric/gas water heaters (thermostat, element, ignition/pilot, leaks).\n\n${FORM_EN}`,
+  otro: `Option: Other 
+Description: tell us your need (installations, maintenance, quotes, etc.).\n\n${FORM_EN}`,
+  cita: `Option: Appointment 
+To schedule your appointment now, send your name, number, and available time. Or click this link:
+📅 https://wa.me/17879220068?text=I%20want%20to%20schedule%20an%20appointment${CIERRE_EN}`,
 };
 
 // =====================
@@ -136,43 +124,43 @@ const norm = (s) =>
 
 function detectLanguage(bodyRaw) {
   const t = norm(bodyRaw);
-  if (/(^|\b)(hello|hi|english|menu en|start|back)(\b|$)/.test(t)) return 'en';
-  if (/(^|\b)(espanol|menu es|hola|buenas|inicio|volver|menu)(\b|$)/.test(t)) return 'es';
+  if (/(english|menu en|hi|hello|back)/.test(t)) return 'en';
+  if (/(espanol|menu es|hola|buenas|volver|inicio|menu)/.test(t)) return 'es';
   if (/(unclog|leak|camera|heater|appointment)/.test(t)) return 'en';
   if (/(destape|fuga|camara|calentador|cita)/.test(t)) return 'es';
   return 'es';
 }
 
-const KEYWORDS_ES = {
-  destape: ['destape', 'tapon', 'tapada', 'obstruccion', 'drenaje', 'fregadero', 'inodoro', 'principal', 'ducha', 'lavamanos', 'banera', 'bañera'],
-  fuga: ['fuga', 'salidero', 'goteo', 'humedad', 'filtracion', 'charco'],
-  camara: ['camara', 'cámara', 'inspeccion', 'video'],
-  calentador: ['calentador', 'boiler', 'agua caliente', 'gas', 'electrico', 'eléctrico'],
-  otro: ['otro', 'servicio', 'ayuda', 'cotizacion', 'presupuesto'],
-};
-const KEYWORDS_EN = {
-  destape: ['unclog', 'clog', 'blocked', 'drain', 'sink', 'toilet', 'main line', 'shower', 'lavatory', 'bathtub'],
-  fuga: ['leak', 'water leak', 'dripping', 'moisture', 'wet', 'puddle'],
-  camara: ['camera', 'inspection', 'video', 'pipe inspection'],
-  calentador: ['heater', 'hot water', 'gas heater', 'electric heater'],
-  otro: ['other', 'help', 'service', 'quote', 'estimate'],
-};
-
 function matchChoice(bodyRaw, lang) {
   const b = norm(bodyRaw);
-  const keywords = lang === 'en' ? KEYWORDS_EN : KEYWORDS_ES;
+  if (OPCIONES[b]) return OPCIONES[b]; // número exacto 1–6
+  const words = {
+    es: {
+      destape: ['destape', 'tapon', 'tapada', 'fregadero', 'inodoro', 'principal', 'ducha', 'lavamanos', 'banera', 'bañera'],
+      fuga: ['fuga', 'salidero', 'goteo', 'humedad', 'filtracion', 'charco'],
+      camara: ['camara', 'cámara', 'video', 'inspeccion'],
+      calentador: ['calentador', 'agua caliente', 'boiler', 'gas', 'electrico', 'eléctrico'],
+      otro: ['otro', 'servicio', 'ayuda', 'cotizacion', 'presupuesto'],
+      cita: ['cita', 'agendar', 'reservar', 'agenda'],
+    },
+    en: {
+      destape: ['unclog', 'clog', 'blocked', 'drain', 'sink', 'toilet', 'main line', 'shower', 'lavatory', 'bathtub'],
+      fuga: ['leak', 'water leak', 'dripping', 'moisture', 'wet', 'puddle'],
+      camara: ['camera', 'inspection', 'video', 'pipe inspection'],
+      calentador: ['heater', 'hot water', 'gas heater', 'electric heater'],
+      otro: ['other', 'service', 'help', 'quote', 'estimate'],
+      cita: ['appointment', 'schedule', 'book', 'appt'],
+    },
+  }[lang];
 
-  if (OPCIONES[b]) return OPCIONES[b];
-  if (['destape', 'fuga', 'camara', 'calentador', 'otro'].includes(b)) return b;
-
-  for (const [key, arr] of Object.entries(keywords)) {
+  for (const [key, arr] of Object.entries(words)) {
     if (arr.some((k) => b.includes(k))) return key;
   }
   return null;
 }
 
 // =====================
-// SQLITE con migración
+// SQLITE (con migración)
 // =====================
 let db;
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
@@ -180,9 +168,7 @@ const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
 async function initDB() {
   if (db) return db;
   db = await open({ filename: './sessions.db', driver: sqlite3.Database });
-
   await db.exec(`CREATE TABLE IF NOT EXISTS sessions (from_number TEXT PRIMARY KEY);`);
-
   const cols = await db.all(`PRAGMA table_info(sessions)`);
   const have = new Set(cols.map((c) => c.name));
   const needed = [
@@ -197,15 +183,13 @@ async function initDB() {
       await db.exec(`ALTER TABLE sessions ADD COLUMN ${c.name} ${c.def};`);
     }
   }
-
-  await db.run('DELETE FROM sessions WHERE last_active IS NOT NULL AND last_active < ?', Date.now() - SESSION_TTL_MS);
+  await db.run('DELETE FROM sessions WHERE last_active < ?', Date.now() - SESSION_TTL_MS);
   return db;
 }
 
 async function getSession(from) {
   return await db.get('SELECT * FROM sessions WHERE from_number = ?', from);
 }
-
 async function upsertSession(from, patch) {
   const prev = (await getSession(from)) || {};
   const now = Date.now();
@@ -216,7 +200,6 @@ async function upsertSession(from, patch) {
     lang: patch.lang ?? prev.lang ?? 'es',
     last_active: now,
   };
-
   await db.run(
     `
     INSERT INTO sessions (from_number, last_choice, awaiting_details, details, last_active, lang)
@@ -232,13 +215,12 @@ async function upsertSession(from, patch) {
   );
   return next;
 }
-
 async function clearSession(from) {
   await db.run('DELETE FROM sessions WHERE from_number = ?', from);
 }
 
 // =====================
-// TWILIO XML
+// RESPUESTA XML TWILIO
 // =====================
 function sendTwilioXML(res, text) {
   const safe = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -262,42 +244,46 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
   // Sesión + idioma
   let session = await getSession(from);
-  if (!session) {
-    session = await upsertSession(from, { lang: detectLanguage(bodyRaw) });
-  }
+  if (!session) session = await upsertSession(from, { lang: detectLanguage(bodyRaw) });
 
-  if (/(^|\b)(english|menu en)(\b|$)/.test(body)) {
-    session = await upsertSession(from, { lang: 'en' });
-  } else if (/(^|\b)(espanol|menu es)(\b|$)/.test(body)) {
-    session = await upsertSession(from, { lang: 'es' });
-  }
+  // Cambios de idioma
+  if (/(english|menu en)/.test(body)) session = await upsertSession(from, { lang: 'en' });
+  if (/(espanol|menu es)/.test(body)) session = await upsertSession(from, { lang: 'es' });
 
   const lang = session.lang || detectLanguage(bodyRaw) || 'es';
   const isEN = lang === 'en';
   const MENU = isEN ? MENU_EN : MENU_ES;
   const RESP = isEN ? RESP_EN : RESP_ES;
 
-  // Volver al menú
+  // Comandos de menú
   if (!body || ['menu', 'inicio', 'volver', 'start', 'back'].includes(body)) {
     await clearSession(from);
     await upsertSession(from, { lang });
     return sendTwilioXML(res, MENU);
   }
 
-  // Elección del servicio
+  // 🚩 PRIORIDAD: si estamos esperando detalles, GUARDAR DETALLES PRIMERO
+  const s0 = await getSession(from);
+  if (s0?.awaiting_details) {
+    // Si el usuario dice "volver/back/menu", regresa sin guardar
+    if (['menu', 'inicio', 'volver', 'start', 'back'].includes(body)) {
+      await clearSession(from);
+      await upsertSession(from, { lang });
+      return sendTwilioXML(res, MENU);
+    }
+    // Guarda los detalles y cierra el flujo (NO re-detectar servicio aquí)
+    await upsertSession(from, { details: bodyRaw, awaiting_details: 0 });
+    const resumen = isEN
+      ? `✅ Received. I saved your details:\n"${bodyRaw}"\n\nService: *${s0.last_choice || 'n/a'}*\nWe will contact you shortly. Type "back" to return to the menu.`
+      : `✅ Recibido. Guardé tus datos:\n"${bodyRaw}"\n\nServicio: *${s0.last_choice || 'n/a'}*\nNos comunicaremos pronto. Escribe "volver" para regresar al menú.`;
+    return sendTwilioXML(res, resumen);
+  }
+
+  // Si no estamos esperando detalles → evaluar elección del servicio
   const choice = matchChoice(bodyRaw, lang);
   if (choice) {
     await upsertSession(from, { last_choice: choice, awaiting_details: 1, details: null, lang });
     return sendTwilioXML(res, RESP[choice]);
-  }
-
-  // Si estábamos esperando detalles → guardar y cerrar sin volver a preguntar
-  const s = await getSession(from);
-  if (s?.last_choice && s?.awaiting_details) {
-    await upsertSession(from, { details: bodyRaw, awaiting_details: 0 });
-    const resumenES = `✅ Recibido. Guardé tus datos:\n"${bodyRaw}"\n\nServicio: *${s.last_choice}*\nNos comunicaremos pronto. Escribe "volver" para regresar al menú.`;
-    const resumenEN = `✅ Received. I saved your details:\n"${bodyRaw}"\n\nService: *${s.last_choice}*\nWe will contact you shortly. Type "back" to return to the menu."`;
-    return sendTwilioXML(res, isEN ? resumenEN : resumenES);
   }
 
   // Fallback → menú
@@ -305,8 +291,6 @@ app.post('/webhook/whatsapp', async (req, res) => {
 });
 
 // =====================
-// START
+// START SERVER
 // =====================
-app.listen(PORT, () => {
-  console.log(`💬 DestapesPR Bilingual Bot listening on http://localhost:${PORT}`);
-});
+app.listen(PORT, () => console.log(`💬 DestapesPR Bot Bilingüe escuchando en http://localhost:${PORT}`));
