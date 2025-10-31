@@ -10,7 +10,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 const PORT = process.env.PORT || 10000;
-const TAG = '[[BILINGUAL-V3.2]]';
+const TAG = '[[BILINGUAL-V3.3]]';
 
 // =====================
 // TEXTOS BASE
@@ -54,8 +54,8 @@ For Spanish, type "espanol" or "menu es".`;
 
 const OPCIONES = { '1': 'destape', '2': 'fuga', '3': 'camara', '4': 'calentador', '5': 'otro', '6': 'cita' };
 
-// — Formulario común
-const FORM_ES = `Vamos a coordinar tu cita. Por favor indícame zona (municipio/sector), el servicio que necesitas y disponibilidad.${CIERRE_ES}
+// — Formulario común (sin frase de “Let's schedule...” o “Vamos a coordinar...”)
+const FORM_ES = `${CIERRE_ES}
 
 Por favor envía en un solo mensaje:
 👤 Nombre completo
@@ -67,7 +67,7 @@ Ejemplo:
 
 (Escribe "volver" para regresar al menú)`;
 
-const FORM_EN = `Let's schedule your appointment. Please tell me your area (city/neighborhood), the service you need, and your availability.${CIERRE_EN}
+const FORM_EN = `${CIERRE_EN}
 
 Please send in a single message:
 👤 Full name
@@ -79,7 +79,7 @@ Example:
 
 (Type "back" to return to the menu)`;
 
-// — Descripciones por servicio (sin enlace de cita en 1–5; solo 6 lo tiene)
+// — Descripciones (solo cita mantiene la frase de agendar)
 const RESP_ES = {
   destape: `Opción: Destape 
 Descripción: trabajamos fregaderos, inodoros, duchas y línea principal. También destapamos lavamanos, bañeras y desagües pluviales.\n\n${FORM_ES}`,
@@ -113,7 +113,7 @@ To schedule your appointment now, send your name, number, and available time. Or
 };
 
 // =====================
-// UTILIDADES
+// UTILIDADES Y DB
 // =====================
 const norm = (s) =>
   String(s || '')
@@ -133,7 +133,7 @@ function detectLanguage(bodyRaw) {
 
 function matchChoice(bodyRaw, lang) {
   const b = norm(bodyRaw);
-  if (OPCIONES[b]) return OPCIONES[b]; // número exacto 1–6
+  if (OPCIONES[b]) return OPCIONES[b];
   const words = {
     es: {
       destape: ['destape', 'tapon', 'tapada', 'fregadero', 'inodoro', 'principal', 'ducha', 'lavamanos', 'banera', 'bañera'],
@@ -159,9 +159,6 @@ function matchChoice(bodyRaw, lang) {
   return null;
 }
 
-// =====================
-// SQLITE (con migración)
-// =====================
 let db;
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
 
@@ -219,9 +216,6 @@ async function clearSession(from) {
   await db.run('DELETE FROM sessions WHERE from_number = ?', from);
 }
 
-// =====================
-// RESPUESTA XML TWILIO
-// =====================
 function sendTwilioXML(res, text) {
   const safe = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${safe}</Message></Response>`;
@@ -242,11 +236,9 @@ app.post('/webhook/whatsapp', async (req, res) => {
   const bodyRaw = (req.body.Body || req.body.body || '').toString();
   const body = norm(bodyRaw);
 
-  // Sesión + idioma
   let session = await getSession(from);
   if (!session) session = await upsertSession(from, { lang: detectLanguage(bodyRaw) });
 
-  // Cambios de idioma
   if (/(english|menu en)/.test(body)) session = await upsertSession(from, { lang: 'en' });
   if (/(espanol|menu es)/.test(body)) session = await upsertSession(from, { lang: 'es' });
 
@@ -255,23 +247,19 @@ app.post('/webhook/whatsapp', async (req, res) => {
   const MENU = isEN ? MENU_EN : MENU_ES;
   const RESP = isEN ? RESP_EN : RESP_ES;
 
-  // Comandos de menú
   if (!body || ['menu', 'inicio', 'volver', 'start', 'back'].includes(body)) {
     await clearSession(from);
     await upsertSession(from, { lang });
     return sendTwilioXML(res, MENU);
   }
 
-  // 🚩 PRIORIDAD: si estamos esperando detalles, GUARDAR DETALLES PRIMERO
   const s0 = await getSession(from);
   if (s0?.awaiting_details) {
-    // Si el usuario dice "volver/back/menu", regresa sin guardar
     if (['menu', 'inicio', 'volver', 'start', 'back'].includes(body)) {
       await clearSession(from);
       await upsertSession(from, { lang });
       return sendTwilioXML(res, MENU);
     }
-    // Guarda los detalles y cierra el flujo (NO re-detectar servicio aquí)
     await upsertSession(from, { details: bodyRaw, awaiting_details: 0 });
     const resumen = isEN
       ? `✅ Received. I saved your details:\n"${bodyRaw}"\n\nService: *${s0.last_choice || 'n/a'}*\nWe will contact you shortly. Type "back" to return to the menu.`
@@ -279,14 +267,12 @@ app.post('/webhook/whatsapp', async (req, res) => {
     return sendTwilioXML(res, resumen);
   }
 
-  // Si no estamos esperando detalles → evaluar elección del servicio
   const choice = matchChoice(bodyRaw, lang);
   if (choice) {
     await upsertSession(from, { last_choice: choice, awaiting_details: 1, details: null, lang });
     return sendTwilioXML(res, RESP[choice]);
   }
 
-  // Fallback → menú
   return sendTwilioXML(res, MENU);
 });
 
