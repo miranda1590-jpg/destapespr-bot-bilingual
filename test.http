@@ -1,0 +1,7 @@
+POST http://localhost:3000/webhook/whatsapp
+Content-Type: application/json
+
+{
+  "from": "+17870000000",
+  "body": "Tengo una fuga bajo el fregadero"
+}

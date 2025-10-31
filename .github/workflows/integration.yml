@@ -1,0 +1,39 @@
+name: Integration - Manual Twilio send
+
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: "Mensaje opcional para enviar en la prueba"
+        required: false
+        default: "Prueba desde integración GitHub Actions ✅"
+
+jobs:
+  run-live-twilio:
+    name: Manual live Twilio smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Instala dependencias del repo
+      - run: npm ci --ignore-scripts
+
+      - name: Run Twilio live-send smoke test
+        env:
+          ENABLE_TWILIO: 'true'
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_WHATSAPP_NUMBER: ${{ secrets.TWILIO_WHATSAPP_NUMBER }}
+          TEST_WHATSAPP_TO: ${{ secrets.TEST_WHATSAPP_TO }}
+        run: |
+          # Si falta algún secret, salta el test sin fallar el job
+          if [ -z "$TWILIO_ACCOUNT_SID" ] || [ -z "$TWILIO_AUTH_TOKEN" ] || [ -z "$TWILIO_WHATSAPP_NUMBER" ] || [ -z "$TEST_WHATSAPP_TO" ]; then
+            echo "Skipping Twilio test because required secrets are not set."
+            exit 0
+          fi
+          node scripts/send-test-wa.js "$TEST_WHATSAPP_TO" "${{ github.event.inputs.message }}"

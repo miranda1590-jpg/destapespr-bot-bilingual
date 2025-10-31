@@ -1,0 +1,23 @@
+version: '3.8'
+services:
+  server:
+    image: node:18-bullseye
+    working_dir: /app
+    volumes:
+      - ./:/app
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    command: sh -c "npm install --no-audit --no-fund && npm run dev"
+
+  bot:
+    image: node:18-bullseye
+    working_dir: /app
+    volumes:
+      - ./:/app
+    env_file:
+      - .env
+    command: sh -c "npm install --no-audit --no-fund && node bot.js"
+    depends_on:
+      - server

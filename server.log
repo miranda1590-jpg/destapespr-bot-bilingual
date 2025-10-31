@@ -1,0 +1,14 @@
+DestapesPR Unified Bot (Bilingual) listening on http://localhost:3000
+Expose locally with: npx ngrok http 3000
+SMS from:  15551234567
+Error: username is required
+    at /Users/ale/Downloads/destapespr-unified-bot-bilingual/node_modules/twilio/lib/base/BaseTwilio.js:139:31
+    at Twilio.request (/Users/ale/Downloads/destapespr-unified-bot-bilingual/node_modules/twilio/lib/base/BaseTwilio.js:140:23)
+    at Api.request (/Users/ale/Downloads/destapespr-unified-bot-bilingual/node_modules/twilio/lib/base/Domain.js:47:28)
+    at V2010.request (/Users/ale/Downloads/destapespr-unified-bot-bilingual/node_modules/twilio/lib/base/Version.js:61:29)
+    at V2010.create (/Users/ale/Downloads/destapespr-unified-bot-bilingual/node_modules/twilio/lib/base/Version.js:76:30)
+    at instance.create (/Users/ale/Downloads/destapespr-unified-bot-bilingual/node_modules/twilio/lib/rest/api/v2010/account/message.js:285:77)
+    at file:///Users/ale/Downloads/destapespr-unified-bot-bilingual/server.js:183:39
+    at Layer.handle [as handle_request] (/Users/ale/Downloads/destapespr-unified-bot-bilingual/node_modules/express/lib/router/layer.js:95:5)
+    at next (/Users/ale/Downloads/destapespr-unified-bot-bilingual/node_modules/express/lib/router/route.js:149:13)
+    at Route.dispatch (/Users/ale/Downloads/destapespr-unified-bot-bilingual/node_modules/express/lib/router/route.js:119:3)
