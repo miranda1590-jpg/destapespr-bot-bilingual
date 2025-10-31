@@ -5,16 +5,16 @@ import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 
 const app = express();
-app.use(express.urlencoded({ extended: true })); // Twilio envía form-encoded
+app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(morgan('dev'));
 
-// =====================
-// CONFIG
-// =====================
-const PORT = process.env.PORT || 10000; // Render suele inyectar PORT=10000
-const TAG = '[[BILINGUAL-V1]]';
+const PORT = process.env.PORT || 10000;
+const TAG = '[[BILINGUAL-V2]]';
 
+// =====================
+// TEXTOS / MENÚ
+// =====================
 const CIERRE_ES = `
 ✅ Próximamente nos estaremos comunicando.
 Gracias por su patrocinio.
@@ -52,24 +52,50 @@ For Spanish, type "espanol" or "menu es".`;
 
 const OPCIONES = { '1': 'destape', '2': 'fuga', '3': 'camara', '4': 'calentador', '5': 'otro' };
 
+// Mensaje de solicitud de datos (ES/EN) — el mismo para TODAS las opciones
+const FORM_ES = `Vamos a coordinar tu cita. Por favor indícame zona (municipio/sector), el servicio que necesitas y disponibilidad.${CIERRE_ES}
+
+Por favor envía en un solo mensaje:
+👤 Nombre completo
+📞 Número de contacto (787/939 o EE.UU.)
+⏰ Horario disponible
+
+Ejemplo:
+"Me llamo Ana Rivera, 939-555-9999, 10am-1pm en Caguas"
+
+(Escribe "volver" para regresar al menú)`;
+
+const FORM_EN = `Let's schedule your appointment. Please tell me your area (city/neighborhood), the service you need, and your availability.${CIERRE_EN}
+
+Please send in a single message:
+👤 Full name
+📞 Contact number (US/PR)
+⏰ Available time window
+
+Example:
+"My name is Ana Rivera, (939) 555-9999, 10am-1pm in Caguas"
+
+(Type "back" to return to the menu)`;
+
+// Respuestas por opción: ahora solo encabezamos con texto corto y pasamos al formulario
 const RESP_ES = {
-  destape: `Perfecto. ¿En qué área estás (municipio o sector)? Luego cuéntame qué línea está tapada (fregadero, inodoro, principal, etc.).${CIERRE_ES}`,
-  fuga: `Entendido. ¿Dónde notas la fuga o humedad? ¿Es dentro o fuera de la propiedad?${CIERRE_ES}`,
-  camara: `Realizamos inspección con cámara. ¿En qué área la necesitas (baño, cocina, línea principal)?${CIERRE_ES}`,
-  calentador: `Revisamos calentadores eléctricos o de gas. ¿Qué tipo tienes y qué problema notas?${CIERRE_ES}`,
-  otro: `Cuéntame brevemente qué servicio necesitas y en qué área estás.${CIERRE_ES}`,
+  destape: `Opción: Destape (drenajes/tuberías tapadas).\n\n${FORM_ES}`,
+  fuga: `Opción: Fuga (fugas de agua).\n\n${FORM_ES}`,
+  camara: `Opción: Cámara (inspección con cámara).\n\n${FORM_ES}`,
+  calentador: `Opción: Calentador (gas o eléctrico).\n\n${FORM_ES}`,
+  otro: `Opción: Otro servicio.\n\n${FORM_ES}`,
 };
 
 const RESP_EN = {
-  destape: `Perfect. Which area are you in (city or neighborhood)? Also tell me which line is clogged (sink, toilet, main, etc.).${CIERRE_EN}`,
-  fuga: `Got it. Where do you notice the leak or moisture? Is it inside or outside the property?${CIERRE_EN}`,
-  camara: `We perform video inspections. In which area do you need it (bathroom, kitchen, main line)?${CIERRE_EN}`,
-  calentador: `We check electric or gas water heaters. Which type do you have and what issue do you notice?${CIERRE_EN}`,
-  otro: `Please tell me briefly what service you need and in which area you are.${CIERRE_EN}`,
+  destape: `Option: Unclog (drains/blocked pipes).\n\n${FORM_EN}`,
+  fuga: `Option: Leak (water leaks).\n\n${FORM_EN}`,
+  camara: `Option: Camera (video inspection).\n\n${FORM_EN}`,
+  calentador: `Option: Heater (gas or electric).\n\n${FORM_EN}`,
+  otro: `Option: Other service.\n\n${FORM_EN}`,
 };
 
 // =====================
-// UTILIDADES
+// UTILIDAD
 // =====================
 const norm = (s) =>
   String(s || '')
@@ -80,22 +106,21 @@ const norm = (s) =>
 
 function detectLanguage(bodyRaw) {
   const t = norm(bodyRaw);
-  if (/(^|\b)(hello|hi|hey|english|menu en|start|back)(\b|$)/.test(t)) return 'en';
+  if (/(^|\b)(hello|hi|english|menu en|start|back)(\b|$)/.test(t)) return 'en';
   if (/(^|\b)(espanol|menu es|hola|buenas|inicio|volver|menu)(\b|$)/.test(t)) return 'es';
-  // Heurística por palabras
-  if (/(unclog|clog|leak|camera|heater|appointment)/.test(t)) return 'en';
-  if (/(destape|fuga|camara|camar|calentador|cita)/.test(t)) return 'es';
+  // heurística adicional
+  if (/(unclog|leak|camera|heater|appointment)/.test(t)) return 'en';
+  if (/(destape|fuga|camara|calentador|cita)/.test(t)) return 'es';
   return 'es';
 }
 
 const KEYWORDS_ES = {
-  destape: ['destape', 'tapon', 'tapones', 'tapada', 'obstruccion', 'drenaje', 'fregadero', 'inodoro', 'principal'],
+  destape: ['destape', 'tapon', 'tapada', 'obstruccion', 'drenaje', 'fregadero', 'inodoro', 'principal'],
   fuga: ['fuga', 'salidero', 'goteo', 'humedad', 'filtracion', 'charco'],
   camara: ['camara', 'cámara', 'inspeccion', 'video'],
   calentador: ['calentador', 'boiler', 'agua caliente', 'gas', 'electrico', 'eléctrico'],
   otro: ['otro', 'servicio', 'ayuda', 'cotizacion', 'presupuesto'],
 };
-
 const KEYWORDS_EN = {
   destape: ['unclog', 'clog', 'blocked', 'drain', 'sink', 'toilet', 'main line'],
   fuga: ['leak', 'water leak', 'dripping', 'moisture', 'wet', 'puddle'],
@@ -108,13 +133,9 @@ function matchChoice(bodyRaw, lang) {
   const b = norm(bodyRaw);
   const keywords = lang === 'en' ? KEYWORDS_EN : KEYWORDS_ES;
 
-  // Opción por número
   if (OPCIONES[b]) return OPCIONES[b];
-
-  // Opción exacta por palabra clave "base"
   if (['destape', 'fuga', 'camara', 'calentador', 'otro'].includes(b)) return b;
 
-  // Coincidencia por presencia de sinónimos
   for (const [key, arr] of Object.entries(keywords)) {
     if (arr.some((k) => b.includes(k))) return key;
   }
@@ -122,7 +143,7 @@ function matchChoice(bodyRaw, lang) {
 }
 
 // =====================
-// SQLITE (con migración automática)
+// SQLITE con migración
 // =====================
 let db;
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
@@ -131,34 +152,24 @@ async function initDB() {
   if (db) return db;
   db = await open({ filename: './sessions.db', driver: sqlite3.Database });
 
-  // Crear tabla base (si no existe)
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      from_number TEXT PRIMARY KEY
-    );
-  `);
+  await db.exec(`CREATE TABLE IF NOT EXISTS sessions (from_number TEXT PRIMARY KEY);`);
 
-  // Migrar columnas que falten
   const cols = await db.all(`PRAGMA table_info(sessions)`);
   const have = new Set(cols.map((c) => c.name));
-
   const needed = [
-    { name: 'last_choice', def: "TEXT" },
-    { name: 'awaiting_details', def: "INTEGER DEFAULT 0" },
-    { name: 'details', def: "TEXT" },
-    { name: 'last_active', def: "INTEGER" },
+    { name: 'last_choice', def: 'TEXT' },
+    { name: 'awaiting_details', def: 'INTEGER DEFAULT 0' },
+    { name: 'details', def: 'TEXT' },
+    { name: 'last_active', def: 'INTEGER' },
     { name: 'lang', def: "TEXT DEFAULT 'es'" },
   ];
-
   for (const c of needed) {
     if (!have.has(c.name)) {
       await db.exec(`ALTER TABLE sessions ADD COLUMN ${c.name} ${c.def};`);
     }
   }
 
-  // Limpiar sesiones viejas
   await db.run('DELETE FROM sessions WHERE last_active IS NOT NULL AND last_active < ?', Date.now() - SESSION_TTL_MS);
-
   return db;
 }
 
@@ -190,7 +201,6 @@ async function upsertSession(from, patch) {
   `,
     [from, next.last_choice, next.awaiting_details, next.details, next.last_active, next.lang]
   );
-
   return next;
 }
 
@@ -199,7 +209,7 @@ async function clearSession(from) {
 }
 
 // =====================
-// RESPUESTA TWILIO
+// TWILIO XML
 // =====================
 function sendTwilioXML(res, text) {
   const safe = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -221,13 +231,13 @@ app.post('/webhook/whatsapp', async (req, res) => {
   const bodyRaw = (req.body.Body || req.body.body || '').toString();
   const body = norm(bodyRaw);
 
-  // Cargar/crear sesión y decidir idioma
+  // Preparar/actualizar sesión
   let session = await getSession(from);
   if (!session) {
     session = await upsertSession(from, { lang: detectLanguage(bodyRaw) });
   }
 
-  // Cambio explícito de idioma
+  // Cambios explícitos de idioma
   if (/(^|\b)(english|menu en)(\b|$)/.test(body)) {
     session = await upsertSession(from, { lang: 'en' });
   } else if (/(^|\b)(espanol|menu es)(\b|$)/.test(body)) {
@@ -246,22 +256,24 @@ app.post('/webhook/whatsapp', async (req, res) => {
     return sendTwilioXML(res, MENU);
   }
 
-  // Detección de opción
+  // Opción del menú
   const choice = matchChoice(bodyRaw, lang);
   if (choice) {
+    // ⚠️ Aquí marcamos una sola vez awaiting_details=1
     await upsertSession(from, { last_choice: choice, awaiting_details: 1, details: null, lang });
-    const hint = isEN ? 'Type "menu" to return to the main menu' : 'Escribe "menu" para regresar al menú';
-    return sendTwilioXML(res, `${RESP[choice]}\n\n(${hint})`);
+    return sendTwilioXML(res, RESP[choice]);
   }
 
-  // Si estaba esperando detalles
+  // Si estábamos esperando detalles → GUARDAR y CERRAR (no volver a pedir)
   const s = await getSession(from);
   if (s?.last_choice && s?.awaiting_details) {
+    // Guardar y cerrar la espera
     await upsertSession(from, { details: bodyRaw, awaiting_details: 0 });
-    const reply = isEN
-      ? `Thanks. I saved your details for *${s.last_choice}*:\n"${bodyRaw}"${CIERRE_EN}`
-      : `Gracias. Guardé tus detalles para *${s.last_choice}*:\n"${bodyRaw}"${CIERRE_ES}`;
-    return sendTwilioXML(res, reply);
+
+    const resumenES = `✅ Recibido. Guardé tus datos:\n"${bodyRaw}"\n\nServicio: *${s.last_choice}*\nNos comunicaremos pronto. Escribe "volver" para regresar al menú.`;
+    const resumenEN = `✅ Received. I saved your details:\n"${bodyRaw}"\n\nService: *${s.last_choice}*\nWe will contact you shortly. Type "back" to return to the menu.`;
+
+    return sendTwilioXML(res, isEN ? resumenEN : resumenES);
   }
 
   // Fallback → menú
