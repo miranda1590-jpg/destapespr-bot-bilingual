@@ -10,7 +10,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 const PORT = process.env.PORT || 10000;
-const TAG = '[[BILINGUAL-V3.3]]';
+const TAG = '[[BILINGUAL-V3.4]]';
 
 // =====================
 // TEXTOS BASE
@@ -54,9 +54,27 @@ For Spanish, type "espanol" or "menu es".`;
 
 const OPCIONES = { '1': 'destape', '2': 'fuga', '3': 'camara', '4': 'calentador', '5': 'otro', '6': 'cita' };
 
-// — Formulario común (sin frase de “Let's schedule...” o “Vamos a coordinar...”)
-const FORM_ES = `${CIERRE_ES}
+const NOMBRES_SERVICIOS = {
+  es: {
+    destape: 'Destape',
+    fuga: 'Fuga',
+    camara: 'Cámara',
+    calentador: 'Calentador',
+    otro: 'Otro servicio',
+    cita: 'Cita',
+  },
+  en: {
+    destape: 'Unclog',
+    fuga: 'Leak',
+    camara: 'Camera Inspection',
+    calentador: 'Heater',
+    otro: 'Other Service',
+    cita: 'Appointment',
+  },
+};
 
+// — Formulario común (sin “schedule”)
+const FORM_ES = `
 Por favor envía en un solo mensaje:
 👤 Nombre completo
 📞 Número de contacto (787/939 o EE.UU.)
@@ -67,8 +85,7 @@ Ejemplo:
 
 (Escribe "volver" para regresar al menú)`;
 
-const FORM_EN = `${CIERRE_EN}
-
+const FORM_EN = `
 Please send in a single message:
 👤 Full name
 📞 Contact number (US/PR)
@@ -79,18 +96,18 @@ Example:
 
 (Type "back" to return to the menu)`;
 
-// — Descripciones (solo cita mantiene la frase de agendar)
+// — Descripciones (solo cita mantiene el enlace)
 const RESP_ES = {
   destape: `Opción: Destape 
-Descripción: trabajamos fregaderos, inodoros, duchas y línea principal. También destapamos lavamanos, bañeras y desagües pluviales.\n\n${FORM_ES}`,
+Descripción: trabajamos fregaderos, inodoros, duchas y línea principal. También destapamos lavamanos, bañeras y desagües pluviales.${FORM_ES}`,
   fuga: `Opción: Fuga 
-Descripción: localizamos y reparamos salideros, filtraciones y goteos. Orientación sobre humedad en paredes, techos o patios.\n\n${FORM_ES}`,
-  camara: `Opción: Cámara (inspección) 
-Descripción: inspección con video para detectar roturas, raíces u obstrucciones; se puede documentar con evidencia.\n\n${FORM_ES}`,
+Descripción: localizamos y reparamos salideros, filtraciones y goteos. Orientación sobre humedad en paredes, techos o patios.${FORM_ES}`,
+  camara: `Opción: Cámara 
+Descripción: inspección con video para detectar roturas, raíces u obstrucciones; se puede documentar con evidencia.${FORM_ES}`,
   calentador: `Opción: Calentador 
-Descripción: diagnóstico y corrección en calentadores eléctricos o de gas (termostato, resistencia, ignición/piloto, fugas).\n\n${FORM_ES}`,
+Descripción: diagnóstico y corrección en calentadores eléctricos o de gas (termostato, resistencia, ignición/piloto, fugas).${FORM_ES}`,
   otro: `Opción: Otro servicio 
-Descripción: cuéntanos tu necesidad (instalaciones, mantenimiento, cotizaciones, etc.).\n\n${FORM_ES}`,
+Descripción: cuéntanos tu necesidad (instalaciones, mantenimiento, cotizaciones, etc.).${FORM_ES}`,
   cita: `Opción: Cita 
 Para coordinar tu cita ahora, envía tu nombre, número y horario disponible. También puedes hacerlo directamente en WhatsApp: 
 📅 https://wa.me/17879220068?text=Quiero%20agendar%20una%20cita${CIERRE_ES}`,
@@ -98,15 +115,15 @@ Para coordinar tu cita ahora, envía tu nombre, número y horario disponible. Ta
 
 const RESP_EN = {
   destape: `Option: Unclog 
-Description: we handle sinks, toilets, showers, and the main line; also lavatories, bathtubs, and storm drains.\n\n${FORM_EN}`,
+Description: we handle sinks, toilets, showers, and the main line; also lavatories, bathtubs, and storm drains.${FORM_EN}`,
   fuga: `Option: Leak 
-Description: we detect and repair water leaks, drips, and seepage; guidance for damp walls/ceilings/yards.\n\n${FORM_EN}`,
-  camara: `Option: Camera (inspection) 
-Description: video inspection to find breaks, roots, or blockages; optional photo/video documentation.\n\n${FORM_EN}`,
+Description: we detect and repair water leaks, drips, and seepage; guidance for damp walls/ceilings/yards.${FORM_EN}`,
+  camara: `Option: Camera Inspection 
+Description: video inspection to find breaks, roots, or blockages; optional photo/video documentation.${FORM_EN}`,
   calentador: `Option: Heater 
-Description: diagnosis and fix for electric/gas water heaters (thermostat, element, ignition/pilot, leaks).\n\n${FORM_EN}`,
+Description: diagnosis and fix for electric/gas water heaters (thermostat, element, ignition/pilot, leaks).${FORM_EN}`,
   otro: `Option: Other 
-Description: tell us your need (installations, maintenance, quotes, etc.).\n\n${FORM_EN}`,
+Description: tell us your need (installations, maintenance, quotes, etc.).${FORM_EN}`,
   cita: `Option: Appointment 
 To schedule your appointment now, send your name, number, and available time. Or click this link:
 📅 https://wa.me/17879220068?text=I%20want%20to%20schedule%20an%20appointment${CIERRE_EN}`,
@@ -136,23 +153,22 @@ function matchChoice(bodyRaw, lang) {
   if (OPCIONES[b]) return OPCIONES[b];
   const words = {
     es: {
-      destape: ['destape', 'tapon', 'tapada', 'fregadero', 'inodoro', 'principal', 'ducha', 'lavamanos', 'banera', 'bañera'],
-      fuga: ['fuga', 'salidero', 'goteo', 'humedad', 'filtracion', 'charco'],
+      destape: ['destape', 'tapon', 'tapada', 'fregadero', 'inodoro', 'principal', 'ducha'],
+      fuga: ['fuga', 'salidero', 'goteo', 'humedad', 'filtracion'],
       camara: ['camara', 'cámara', 'video', 'inspeccion'],
       calentador: ['calentador', 'agua caliente', 'boiler', 'gas', 'electrico', 'eléctrico'],
-      otro: ['otro', 'servicio', 'ayuda', 'cotizacion', 'presupuesto'],
+      otro: ['otro', 'servicio', 'ayuda', 'cotizacion'],
       cita: ['cita', 'agendar', 'reservar', 'agenda'],
     },
     en: {
-      destape: ['unclog', 'clog', 'blocked', 'drain', 'sink', 'toilet', 'main line', 'shower', 'lavatory', 'bathtub'],
-      fuga: ['leak', 'water leak', 'dripping', 'moisture', 'wet', 'puddle'],
+      destape: ['unclog', 'clog', 'blocked', 'drain', 'sink', 'toilet', 'main line'],
+      fuga: ['leak', 'water leak', 'dripping', 'moisture', 'wet'],
       camara: ['camera', 'inspection', 'video', 'pipe inspection'],
       calentador: ['heater', 'hot water', 'gas heater', 'electric heater'],
       otro: ['other', 'service', 'help', 'quote', 'estimate'],
       cita: ['appointment', 'schedule', 'book', 'appt'],
     },
   }[lang];
-
   for (const [key, arr] of Object.entries(words)) {
     if (arr.some((k) => b.includes(k))) return key;
   }
@@ -246,6 +262,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
   const isEN = lang === 'en';
   const MENU = isEN ? MENU_EN : MENU_ES;
   const RESP = isEN ? RESP_EN : RESP_ES;
+  const CIERRE = isEN ? CIERRE_EN : CIERRE_ES;
+  const NOMBRE_SERV = NOMBRES_SERVICIOS[lang];
 
   if (!body || ['menu', 'inicio', 'volver', 'start', 'back'].includes(body)) {
     await clearSession(from);
@@ -262,8 +280,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
     }
     await upsertSession(from, { details: bodyRaw, awaiting_details: 0 });
     const resumen = isEN
-      ? `✅ Received. I saved your details:\n"${bodyRaw}"\n\nService: *${s0.last_choice || 'n/a'}*\nWe will contact you shortly. Type "back" to return to the menu.`
-      : `✅ Recibido. Guardé tus datos:\n"${bodyRaw}"\n\nServicio: *${s0.last_choice || 'n/a'}*\nNos comunicaremos pronto. Escribe "volver" para regresar al menú.`;
+      ? `✅ Received. I saved your details:\n"${bodyRaw}"\n\nService: *${NOMBRE_SERV[s0.last_choice] || 'n/a'}*${CIERRE}`
+      : `✅ Recibido. Guardé tus datos:\n"${bodyRaw}"\n\nServicio: *${NOMBRE_SERV[s0.last_choice] || 'n/a'}*${CIERRE}`;
     return sendTwilioXML(res, resumen);
   }
 
