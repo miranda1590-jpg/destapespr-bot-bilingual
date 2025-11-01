@@ -32,7 +32,7 @@ Gracias por su patrocinio.
 📞 ${PHONE}
 📘 Facebook: ${FB_LINK}
 
-🤖 Bilingual Bot V4`;
+🤖 Bilingual Bot V5`;
 
 const FOOTER_EN = `
 ✅ We will contact you shortly.
@@ -42,7 +42,7 @@ Thank you for your business.
 📞 ${PHONE}
 📘 Facebook: ${FB_LINK}
 
-🤖 Bilingual Bot V4`;
+🤖 Bilingual Bot V5`;
 
 const MAIN_MENU_ES = `
 🇵🇷 *Bienvenido a DestapesPR Bilingual Bot* 🤖
