@@ -10,12 +10,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(morgan("dev"));
 
-// ===== Config =====
+// ================== CONFIG ==================
 const PHONE = "+17879220068";
 const FB_LINK = "https://www.facebook.com/destapesPR/";
 const TAG = "V4-PR-FOOTER";
 
-// Números-emoji (Unicode escapes garantizan que se vean)
+// Números-emoji (Unicode escapes)
 const N1 = "\u0031\uFE0F\u20E3"; // 1️⃣
 const N2 = "\u0032\uFE0F\u20E3"; // 2️⃣
 const N3 = "\u0033\uFE0F\u20E3"; // 3️⃣
@@ -77,7 +77,7 @@ ${N6}  Schedule an appointment
 
 Commands: "start", "menu" or "back" to return to the menu.`;
 
-// Respuestas por servicio
+// Descripciones por servicio
 const RESP_ES = {
   destape: `🚿 Perfecto. ¿En qué área estás (municipio o sector)?
 Luego cuéntame qué línea está tapada (fregadero, inodoro, principal, etc.).`,
@@ -153,20 +153,11 @@ const KEYWORDS = {
   }
 };
 
-// ====== SQLite init + migración segura ======
+// ============== DB INIT + MIGRACIÓN ==============
 let db;
 async function ensureSchema(dbo) {
-  // Crea tabla si no existe (sin perder datos)
-  await dbo.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      from_number TEXT PRIMARY KEY
-    )
-  `);
-
-  // Lee columnas existentes
+  await dbo.exec(`CREATE TABLE IF NOT EXISTS sessions ( from_number TEXT PRIMARY KEY )`);
   const cols = new Set((await dbo.all(`PRAGMA table_info(sessions)`)).map(r => r.name));
-
-  // Agrega columnas faltantes una a una
   if (!cols.has("lang"))             await dbo.exec(`ALTER TABLE sessions ADD COLUMN lang TEXT DEFAULT 'es'`);
   if (!cols.has("last_choice"))      await dbo.exec(`ALTER TABLE sessions ADD COLUMN last_choice TEXT`);
   if (!cols.has("awaiting_details")) await dbo.exec(`ALTER TABLE sessions ADD COLUMN awaiting_details INTEGER DEFAULT 0`);
@@ -181,7 +172,7 @@ async function initDB() {
   return db;
 }
 
-// ===== Utilidades =====
+// ============== UTILIDADES ==============
 function norm(s) {
   return String(s || "")
     .toLowerCase()
@@ -190,14 +181,26 @@ function norm(s) {
     .trim();
 }
 
-function detectLang(s) {
-  const t = s || "";
-  const englishHints = /\b(unclog|leak|camera|heater|appointment|schedule|book|other)\b/i.test(t);
+// Detección robusta de idioma
+function detectLangSmart(from, body) {
+  const t = body || "";
+
+  // pistas fuertes
+  const englishHints = /\b(unclog|leak|camera|heater|appointment|schedule|book|other|quote|service|help)\b/i.test(t);
+  const spanishHints = /\b(destape|fuga|c[aá]mara|calentador|cita|agendar|reservar|hola|buenos|buenas|gracias|inodoro|fregadero|desag[üu]e|tuber[ií]a)\b/i.test(t);
+
   const hasAccents = /[áéíóúñÁÉÍÓÚÑ]/.test(t);
+
+  // Regla por número de PR
+  const isPR = typeof from === "string" && (/^\+1(787|939)/.test(from));
+
+  if (spanishHints || hasAccents) return "es";
   if (englishHints) return "en";
-  if (hasAccents) return "es";
-  if (/[a-z]/i.test(t) && !/[áéíóúñ]/i.test(t)) return "en";
-  return "es";
+
+  // Por defecto: PR → ES; de lo contrario, EN
+  if (isPR) return "es";
+  // Si tiene solo ASCII y palabras neutrales, preferimos EN si no es PR
+  return "en";
 }
 
 function chooseByNumberOrWord(body, lang) {
@@ -216,11 +219,10 @@ function twiml(text) {
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${safe}</Message></Response>`;
 }
 
-// ===== Endpoints básicos =====
+// ============== ENDPOINTS ==============
 app.get("/", (_req, res) => res.send(`${TAG} DestapesPR Bot OK`));
 app.get("/__version", (_req, res) => res.json({ ok: true, tag: TAG, tz: "America/Puerto_Rico" }));
 
-// ===== Webhook WhatsApp =====
 app.post("/webhook/whatsapp", async (req, res) => {
   await initDB();
   res.set("Content-Type", "application/xml; charset=utf-8");
@@ -231,7 +233,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
 
   let s = await db.get("SELECT * FROM sessions WHERE from_number = ?", from);
   if (!s) {
-    const lang0 = detectLang(body);
+    const lang0 = detectLangSmart(from, body);
     await db.run(
       "INSERT INTO sessions (from_number, lang, last_choice, awaiting_details, details, last_active) VALUES (?, ?, NULL, 0, NULL, ?)",
       from, lang0, Date.now()
@@ -241,7 +243,20 @@ app.post("/webhook/whatsapp", async (req, res) => {
     await db.run("UPDATE sessions SET last_active=? WHERE from_number=?", Date.now(), from);
   }
 
-  const lang = s.lang || detectLang(body);
+  // Re-evalúa idioma SOLO si el mensaje da pistas claras; si no, mantén el de la sesión.
+  const hinted = detectLangSmart(from, body);
+  let lang = s.lang || hinted;
+  if (hinted !== s.lang) {
+    // Cambia si hay pistas fuertes (spanishHints/englishHints) o acentos
+    const switchable = hinted === "es"
+      ? /\b(destape|fuga|c[aá]mara|calentador|cita|agendar|reservar|hola|buen[oa]s|gracias|inodoro|fregadero|desag[üu]e|tuber[ií]a)\b/i.test(body) || /[áéíóúñÁÉÍÓÚÑ]/.test(body)
+      : /\b(unclog|leak|camera|heater|appointment|schedule|book|other|quote|service|help)\b/i.test(body);
+    if (switchable) {
+      lang = hinted;
+      await db.run("UPDATE sessions SET lang=? WHERE from_number=?", lang, from);
+    }
+  }
+
   const MENU = lang === "en" ? MAIN_MENU_EN : MAIN_MENU_ES;
   const RESP = lang === "en" ? RESP_EN : RESP_ES;
   const FOOT = lang === "en" ? FOOTER_EN : FOOTER_ES;
@@ -271,6 +286,7 @@ ${lang==="en"
     return res.status(200).send(twiml(msg));
   }
 
+  // Si está esperando detalles, guarda y confirma
   if (s.last_choice && s.awaiting_details) {
     await db.run("UPDATE sessions SET details=?, awaiting_details=0 WHERE from_number=?", bodyRaw, from);
     const lbl = SERVICE_LABEL[lang]?.[s.last_choice] || s.last_choice;
@@ -280,6 +296,7 @@ ${lang==="en"
     return res.status(200).send(twiml(confirm));
   }
 
+  // Facebook directo
   if (["facebook","fb"].includes(cmd)) {
     const fbMsg = lang==="en"
       ? `📘 Our Facebook page:\n${FB_LINK}\n\n${FOOT}`
@@ -287,6 +304,7 @@ ${lang==="en"
     return res.status(200).send(twiml(fbMsg));
   }
 
+  // Por defecto: menú en el idioma de la sesión
   return res.status(200).send(twiml(MENU));
 });
 
