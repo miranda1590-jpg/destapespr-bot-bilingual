@@ -10,123 +10,111 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 const PORT = process.env.PORT || 10000;
-const TAG = '[[BILINGUAL-V3.4]]';
+const TAG = '[[BILINGUAL-V3.5]]';
 
 // =====================
 // TEXTOS BASE
 // =====================
 const CIERRE_ES = `
 ✅ Próximamente nos estaremos comunicando.
-Gracias por su patrocinio.
-— DestapesPR`;
+🙏 Gracias por su patrocinio.
+🚿 — DestapesPR 💧`;
 const CIERRE_EN = `
 ✅ We will contact you shortly.
-Thank you for your business.
-— DestapesPR`;
+🙏 Thank you for your business.
+🚿 — DestapesPR 💧`;
 
-const MENU_ES = `${TAG} Bienvenido a DestapesPR
+const MENU_ES = `${TAG} 👋 ¡Bienvenido a *DestapesPR*! 💦
 
-Escribe el número o la palabra del servicio que necesitas:
+Selecciona el número o escribe la palabra del servicio que necesitas:
 
-1 - Destape (drenajes o tuberías tapadas)
-2 - Fuga (fugas de agua)
-3 - Cámara (inspección con cámara)
-4 - Calentador (gas o eléctrico)
-5 - Otro (otro tipo de servicio)
-6 - Cita (coordinar cita directamente)
+1️⃣ - 🚰 *Destape* (drenajes o tuberías tapadas)
+2️⃣ - 💧 *Fuga* (fugas de agua o filtraciones)
+3️⃣ - 🎥 *Cámara* (inspección con cámara)
+4️⃣ - 🔥 *Calentador* (gas o eléctrico)
+5️⃣ - 🧰 *Otro* (otro tipo de servicio)
+6️⃣ - 📅 *Cita* (coordinar cita directamente)
 
-Comandos: "inicio", "menu" o "volver" para regresar al menú.
-Para inglés, escribe "english" o "menu en".`;
+💬 Comandos: “inicio”, “menu” o “volver” para regresar al menú.
+🇺🇸 Para inglés, escribe “english” o “menu en”.`;
 
-const MENU_EN = `${TAG} Welcome to DestapesPR
+const MENU_EN = `${TAG} 👋 *Welcome to DestapesPR!* 💦
 
-Type the number or the word of the service you need:
+Type the number or word of the service you need:
 
-1 - Unclog (drains or blocked pipes)
-2 - Leak (water leaks)
-3 - Camera (video inspection)
-4 - Heater (gas or electric)
-5 - Other (other service)
-6 - Appointment (schedule directly)
+1️⃣ - 🚰 *Unclog* (drains or blocked pipes)
+2️⃣ - 💧 *Leak* (water leaks or moisture)
+3️⃣ - 🎥 *Camera* (video inspection)
+4️⃣ - 🔥 *Heater* (gas or electric)
+5️⃣ - 🧰 *Other* (other type of service)
+6️⃣ - 📅 *Appointment* (schedule directly)
 
-Commands: "menu" or "back" to return to the menu.
-For Spanish, type "espanol" or "menu es".`;
+💬 Commands: “menu” or “back” to return to the menu.
+🇪🇸 For Spanish, type “espanol” or “menu es”.`;
 
 const OPCIONES = { '1': 'destape', '2': 'fuga', '3': 'camara', '4': 'calentador', '5': 'otro', '6': 'cita' };
 
 const NOMBRES_SERVICIOS = {
-  es: {
-    destape: 'Destape',
-    fuga: 'Fuga',
-    camara: 'Cámara',
-    calentador: 'Calentador',
-    otro: 'Otro servicio',
-    cita: 'Cita',
-  },
-  en: {
-    destape: 'Unclog',
-    fuga: 'Leak',
-    camara: 'Camera Inspection',
-    calentador: 'Heater',
-    otro: 'Other Service',
-    cita: 'Appointment',
-  },
+  es: { destape: 'Destape', fuga: 'Fuga', camara: 'Cámara', calentador: 'Calentador', otro: 'Otro servicio', cita: 'Cita' },
+  en: { destape: 'Unclog', fuga: 'Leak', camara: 'Camera Inspection', calentador: 'Heater', otro: 'Other Service', cita: 'Appointment' },
 };
 
 // — Formulario común (sin “schedule”)
 const FORM_ES = `
-Por favor envía en un solo mensaje:
-👤 Nombre completo
-📞 Número de contacto (787/939 o EE.UU.)
-⏰ Horario disponible
+✍️ Por favor envía en un solo mensaje:
+👤 *Nombre completo*
+📞 *Número de contacto* (787/939 o EE.UU.)
+⏰ *Horario disponible*
 
-Ejemplo:
-"Me llamo Ana Rivera, 939-555-9999, 10am-1pm en Caguas"
+🧾 Ejemplo:
+“Me llamo Ana Rivera, 939-555-9999, 10 am–1 pm en Caguas”
 
-(Escribe "volver" para regresar al menú)`;
+(Escribe “volver” para regresar al menú)`;
 
 const FORM_EN = `
-Please send in a single message:
-👤 Full name
-📞 Contact number (US/PR)
-⏰ Available time window
+✍️ Please send in a single message:
+👤 *Full name*
+📞 *Contact number* (US/PR)
+⏰ *Available time window*
 
-Example:
-"My name is Ana Rivera, (939) 555-9999, 10am-1pm in Caguas"
+🧾 Example:
+“My name is Ana Rivera, (939) 555-9999, 10 am–1 pm in Caguas”
 
-(Type "back" to return to the menu)`;
+(Type “back” to return to the menu)`;
 
-// — Descripciones (solo cita mantiene el enlace)
+// — Descripciones (solo cita mantiene enlace)
 const RESP_ES = {
-  destape: `Opción: Destape 
-Descripción: trabajamos fregaderos, inodoros, duchas y línea principal. También destapamos lavamanos, bañeras y desagües pluviales.${FORM_ES}`,
-  fuga: `Opción: Fuga 
-Descripción: localizamos y reparamos salideros, filtraciones y goteos. Orientación sobre humedad en paredes, techos o patios.${FORM_ES}`,
-  camara: `Opción: Cámara 
-Descripción: inspección con video para detectar roturas, raíces u obstrucciones; se puede documentar con evidencia.${FORM_ES}`,
-  calentador: `Opción: Calentador 
-Descripción: diagnóstico y corrección en calentadores eléctricos o de gas (termostato, resistencia, ignición/piloto, fugas).${FORM_ES}`,
-  otro: `Opción: Otro servicio 
-Descripción: cuéntanos tu necesidad (instalaciones, mantenimiento, cotizaciones, etc.).${FORM_ES}`,
-  cita: `Opción: Cita 
-Para coordinar tu cita ahora, envía tu nombre, número y horario disponible. También puedes hacerlo directamente en WhatsApp: 
-📅 https://wa.me/17879220068?text=Quiero%20agendar%20una%20cita${CIERRE_ES}`,
+  destape: `🚰 *Servicio: Destape*  
+💬 Trabajamos fregaderos, inodoros, duchas y líneas principales. También destapamos lavamanos, bañeras y desagües pluviales.${FORM_ES}`,
+  fuga: `💧 *Servicio: Fuga*  
+🔎 Localizamos y reparamos salideros, filtraciones y goteos. También orientamos sobre humedad en paredes, techos o patios.${FORM_ES}`,
+  camara: `🎥 *Servicio: Inspección con cámara*  
+🔍 Detectamos roturas, raíces u obstrucciones en tuberías. Se puede incluir documentación con video o fotos.${FORM_ES}`,
+  calentador: `🔥 *Servicio: Calentador*  
+🛠️ Diagnóstico y reparación en calentadores eléctricos o de gas (termostato, resistencia, ignición/piloto, fugas).${FORM_ES}`,
+  otro: `🧰 *Otro servicio*  
+💭 Cuéntanos brevemente qué necesitas (instalaciones, mantenimiento, cotizaciones, etc.).${FORM_ES}`,
+  cita: `📅 *Cita*  
+🗓️ Para coordinar tu cita ahora, envía tu nombre, número y horario disponible.  
+También puedes hacerlo directamente en WhatsApp:  
+🔗 https://wa.me/17879220068?text=Quiero%20agendar%20una%20cita${CIERRE_ES}`,
 };
 
 const RESP_EN = {
-  destape: `Option: Unclog 
-Description: we handle sinks, toilets, showers, and the main line; also lavatories, bathtubs, and storm drains.${FORM_EN}`,
-  fuga: `Option: Leak 
-Description: we detect and repair water leaks, drips, and seepage; guidance for damp walls/ceilings/yards.${FORM_EN}`,
-  camara: `Option: Camera Inspection 
-Description: video inspection to find breaks, roots, or blockages; optional photo/video documentation.${FORM_EN}`,
-  calentador: `Option: Heater 
-Description: diagnosis and fix for electric/gas water heaters (thermostat, element, ignition/pilot, leaks).${FORM_EN}`,
-  otro: `Option: Other 
-Description: tell us your need (installations, maintenance, quotes, etc.).${FORM_EN}`,
-  cita: `Option: Appointment 
-To schedule your appointment now, send your name, number, and available time. Or click this link:
-📅 https://wa.me/17879220068?text=I%20want%20to%20schedule%20an%20appointment${CIERRE_EN}`,
+  destape: `🚰 *Service: Unclog*  
+💬 We handle sinks, toilets, showers, and main lines; also lavatories, bathtubs, and storm drains.${FORM_EN}`,
+  fuga: `💧 *Service: Leak*  
+🔎 We locate and repair leaks, drips, and moisture issues in walls, ceilings, or yards.${FORM_EN}`,
+  camara: `🎥 *Service: Camera Inspection*  
+🔍 We perform video inspections to detect breaks, roots, or obstructions (optional media report).${FORM_EN}`,
+  calentador: `🔥 *Service: Heater*  
+🛠️ Diagnosis and fix for electric/gas water heaters (thermostat, element, ignition/pilot, leaks).${FORM_EN}`,
+  otro: `🧰 *Other Service*  
+💭 Tell us briefly what you need (installation, maintenance, quote, etc.).${FORM_EN}`,
+  cita: `📅 *Appointment*  
+🗓️ To schedule your appointment now, send your name, number, and available time.  
+Or click this link:  
+🔗 https://wa.me/17879220068?text=I%20want%20to%20schedule%20an%20appointment${CIERRE_EN}`,
 };
 
 // =====================
@@ -192,9 +180,7 @@ async function initDB() {
     { name: 'lang', def: "TEXT DEFAULT 'es'" },
   ];
   for (const c of needed) {
-    if (!have.has(c.name)) {
-      await db.exec(`ALTER TABLE sessions ADD COLUMN ${c.name} ${c.def};`);
-    }
+    if (!have.has(c.name)) await db.exec(`ALTER TABLE sessions ADD COLUMN ${c.name} ${c.def};`);
   }
   await db.run('DELETE FROM sessions WHERE last_active < ?', Date.now() - SESSION_TTL_MS);
   return db;
@@ -242,8 +228,8 @@ function sendTwilioXML(res, text) {
 // =====================
 // ENDPOINTS
 // =====================
-app.get('/', (_req, res) => res.send(`${TAG} Bot bilingüe activo ✅`));
-app.get('/__version', (_req, res) => res.json({ ok: true, tag: TAG }));
+app.get('/', (_req, res) => res.send(`${TAG} 🤖 Bot bilingüe activo ✅`));
+app.get('/__version', (_req, res) => res.json({ ok: true, tag: TAG, version: '3.5', updated: new Date().toISOString() }));
 
 app.post('/webhook/whatsapp', async (req, res) => {
   await initDB();
