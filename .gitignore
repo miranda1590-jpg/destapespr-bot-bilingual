@@ -1,3 +1,9 @@
 sessions.db
 logs/
 node_modules/
+.env
+patches/
+sessions.db
+*.log
+.DS_Store
+node_modules/
