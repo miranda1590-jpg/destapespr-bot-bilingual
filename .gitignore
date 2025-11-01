@@ -7,3 +7,9 @@ sessions.db
 *.log
 .DS_Store
 node_modules/
+.env
+sessions.db
+node_modules/
+patches/
+.DS_Store
+*.log
