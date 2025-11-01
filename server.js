@@ -22,6 +22,7 @@ const N3 = "\u0033\uFE0F\u20E3"; // 3️⃣
 const N4 = "\u0034\uFE0F\u20E3"; // 4️⃣
 const N5 = "\u0035\uFE0F\u20E3"; // 5️⃣
 const N6 = "\u0036\uFE0F\u20E3"; // 6️⃣
+const N7 = "\u0037\uFE0F\u20E3"; // 7️⃣
 
 const FOOTER_ES = `
 ✅ Próximamente nos estaremos comunicando.
@@ -54,11 +55,13 @@ ${N3}  Cámara (inspección con cámara)
 ${N4}  Calentador (gas o eléctrico)
 ${N5}  Otro servicio
 ${N6}  Cita o agendar servicio
+${N7}  Idioma / Language (cambiar ES/EN)
 
 📞 Teléfono directo: ${PHONE}
 📘 Facebook: ${FB_LINK}
 
-Comandos: "inicio", "menu" o "volver" para regresar al menú.`;
+Comandos: "inicio", "menu" o "volver" para regresar al menú.
+Para cambiar idioma, escribe *english* o *español*.`;
 
 const MAIN_MENU_EN = `
 🇵🇷 *Welcome to DestapesPR Bilingual Bot* 🤖
@@ -71,11 +74,13 @@ ${N3}  Camera (pipe inspection)
 ${N4}  Heater (gas or electric)
 ${N5}  Other service
 ${N6}  Schedule an appointment
+${N7}  Language / Idioma (switch EN/ES)
 
 📞 Direct line: ${PHONE}
 📘 Facebook: ${FB_LINK}
 
-Commands: "start", "menu" or "back" to return to the menu.`;
+Commands: "start", "menu" or "back" to return to the menu.
+To switch language, type *english* or *español*.`;
 
 // Descripciones por servicio
 const RESP_ES = {
@@ -122,7 +127,11 @@ const CHOICES = {
     "3": "camara",  [N3]: "camara",  "cámara": "camara", "camara": "camara",
     "4": "calentador",[N4]:"calentador","calentador":"calentador",
     "5": "otro",    [N5]: "otro",    "otro": "otro",
-    "6": "cita",    [N6]: "cita",    "cita": "cita", "agendar": "cita", "reservar": "cita"
+    "6": "cita",    [N6]: "cita",    "cita": "cita", "agendar": "cita", "reservar": "cita",
+    "7": "lang",    [N7]: "lang",
+    "idioma": "lang", "lenguaje": "lang", "language": "lang",
+    "ingles": "lang", "inglés": "lang", "english": "lang",
+    "espanol": "lang", "español": "lang", "spanish": "lang", "en": "lang", "es": "lang"
   },
   en: {
     "1": "destape", [N1]:"destape", "unclog":"destape","clog":"destape","blocked":"destape",
@@ -130,7 +139,10 @@ const CHOICES = {
     "3": "camara",  [N3]:"camara",  "camera":"camara","inspection":"camara",
     "4": "calentador",[N4]:"calentador","heater":"calentador","hot water":"calentador",
     "5": "otro",    [N5]:"otro",    "other":"otro","help":"otro","service":"otro",
-    "6": "cita",    [N6]:"cita",    "appointment":"cita","schedule":"cita","book":"cita"
+    "6": "cita",    [N6]:"cita",    "appointment":"cita","schedule":"cita","book":"cita",
+    "7": "lang",    [N7]:"lang",
+    "language": "lang", "idioma": "lang",
+    "english": "lang", "spanish": "lang", "espanol": "lang", "español": "lang", "en": "lang", "es": "lang"
   }
 };
 
@@ -164,7 +176,6 @@ async function ensureSchema(dbo) {
   if (!cols.has("details"))          await dbo.exec(`ALTER TABLE sessions ADD COLUMN details TEXT`);
   if (!cols.has("last_active"))      await dbo.exec(`ALTER TABLE sessions ADD COLUMN last_active INTEGER`);
 }
-
 async function initDB() {
   if (db) return db;
   db = await open({ filename: "./sessions.db", driver: sqlite3.Database });
@@ -185,21 +196,14 @@ function norm(s) {
 function detectLangSmart(from, body) {
   const t = body || "";
 
-  // pistas fuertes
   const englishHints = /\b(unclog|leak|camera|heater|appointment|schedule|book|other|quote|service|help)\b/i.test(t);
-  const spanishHints = /\b(destape|fuga|c[aá]mara|calentador|cita|agendar|reservar|hola|buenos|buenas|gracias|inodoro|fregadero|desag[üu]e|tuber[ií]a)\b/i.test(t);
-
+  const spanishHints = /\b(destape|fuga|c[aá]mara|calentador|cita|agendar|reservar|hola|buen[oa]s|gracias|inodoro|fregadero|desag[üu]e|tuber[ií]a)\b/i.test(t);
   const hasAccents = /[áéíóúñÁÉÍÓÚÑ]/.test(t);
-
-  // Regla por número de PR
   const isPR = typeof from === "string" && (/^\+1(787|939)/.test(from));
 
   if (spanishHints || hasAccents) return "es";
   if (englishHints) return "en";
-
-  // Por defecto: PR → ES; de lo contrario, EN
   if (isPR) return "es";
-  // Si tiene solo ASCII y palabras neutrales, preferimos EN si no es PR
   return "en";
 }
 
@@ -243,15 +247,13 @@ app.post("/webhook/whatsapp", async (req, res) => {
     await db.run("UPDATE sessions SET last_active=? WHERE from_number=?", Date.now(), from);
   }
 
-  // Re-evalúa idioma SOLO si el mensaje da pistas claras; si no, mantén el de la sesión.
+  // Re-evalúa idioma SOLO si hay pistas claras; si no, mantén sesión
   const hinted = detectLangSmart(from, body);
   let lang = s.lang || hinted;
   if (hinted !== s.lang) {
-    // Cambia si hay pistas fuertes (spanishHints/englishHints) o acentos
-    const switchable = hinted === "es"
-      ? /\b(destape|fuga|c[aá]mara|calentador|cita|agendar|reservar|hola|buen[oa]s|gracias|inodoro|fregadero|desag[üu]e|tuber[ií]a)\b/i.test(body) || /[áéíóúñÁÉÍÓÚÑ]/.test(body)
-      : /\b(unclog|leak|camera|heater|appointment|schedule|book|other|quote|service|help)\b/i.test(body);
-    if (switchable) {
+    const switchToES = /\b(destape|fuga|c[aá]mara|calentador|cita|agendar|reservar|hola|buen[oa]s|gracias|inodoro|fregadero|desag[üu]e|tuber[ií]a)\b/i.test(body) || /[áéíóúñÁÉÍÓÚÑ]/.test(body);
+    const switchToEN = /\b(unclog|leak|camera|heater|appointment|schedule|book|other|quote|service|help)\b/i.test(body);
+    if ((hinted === "es" && switchToES) || (hinted === "en" && switchToEN)) {
       lang = hinted;
       await db.run("UPDATE sessions SET lang=? WHERE from_number=?", lang, from);
     }
@@ -262,17 +264,39 @@ app.post("/webhook/whatsapp", async (req, res) => {
   const FOOT = lang === "en" ? FOOTER_EN : FOOTER_ES;
 
   const cmd = norm(body);
+
+  // Cambio rápido de idioma
+  if (["english","en"].includes(cmd)) {
+    await db.run("UPDATE sessions SET lang=? WHERE from_number=?", "en", from);
+    return res.status(200).send(twiml(MAIN_MENU_EN));
+  }
+  if (["espanol","español","spanish","es"].includes(cmd)) {
+    await db.run("UPDATE sessions SET lang=? WHERE from_number=?", "es", from);
+    return res.status(200).send(twiml(MAIN_MENU_ES));
+  }
+
+  // Comandos de menú
   if (["inicio","menu","volver","start","back"].includes(cmd)) {
     await db.run("UPDATE sessions SET last_choice=NULL, awaiting_details=0, details=NULL WHERE from_number=?", from);
     return res.status(200).send(twiml(MENU));
   }
 
+  // Detección de elección
   const detected = chooseByNumberOrWord(body, lang);
   if (detected) {
+    // Opción de idioma (7)
+    if (detected === "lang") {
+      const promptLang = (lang === "en")
+        ? `🌐 Language settings.\nType *english* or *español* to switch.\n\n${FOOT}`
+        : `🌐 Ajustes de idioma.\nEscribe *english* o *español* para cambiar.\n\n${FOOT}`;
+      return res.status(200).send(twiml(promptLang));
+    }
+
     await db.run(
       "UPDATE sessions SET last_choice=?, awaiting_details=1, details=NULL, lang=? WHERE from_number=?",
       detected, lang, from
     );
+
     const msg = `${RESP[detected]}
 
 ${lang==="en" ? "Please send in one message:" : "Por favor envía en un solo mensaje:"}
@@ -283,6 +307,7 @@ ${lang==="en" ? "Please send in one message:" : "Por favor envía en un solo men
 ${lang==="en"
   ? 'Example:\n"My name is Ana Rivera, 939-555-9999, 10am-1pm in Caguas"'
   : 'Ejemplo:\n"Me llamo Ana Rivera, 939-555-9999, 10am-1pm en Caguas"'}\n\n${FOOT}`;
+
     return res.status(200).send(twiml(msg));
   }
 
