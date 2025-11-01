@@ -13,7 +13,7 @@ app.use(morgan("dev"));
 // ================== CONFIG ==================
 const PHONE = "+17879220068";
 const FB_LINK = "https://www.facebook.com/destapesPR/";
-const TAG = "V4-PR-FOOTER";
+const TAG = "Bilingual Bot V5";
 
 // Números-emoji (Unicode escapes)
 const N1 = "\u0031\uFE0F\u20E3"; // 1️⃣
