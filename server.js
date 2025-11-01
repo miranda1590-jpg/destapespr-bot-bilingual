@@ -10,11 +10,12 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(morgan("dev"));
 
+// ===== Config =====
 const PHONE = "+17879220068";
 const FB_LINK = "https://www.facebook.com/destapesPR/";
 const TAG = "V4-PR-FOOTER";
 
-// Números-emoji vía escapes Unicode (siempre visibles)
+// Números-emoji (Unicode escapes garantizan que se vean)
 const N1 = "\u0031\uFE0F\u20E3"; // 1️⃣
 const N2 = "\u0032\uFE0F\u20E3"; // 2️⃣
 const N3 = "\u0033\uFE0F\u20E3"; // 3️⃣
@@ -76,6 +77,7 @@ ${N6}  Schedule an appointment
 
 Commands: "start", "menu" or "back" to return to the menu.`;
 
+// Respuestas por servicio
 const RESP_ES = {
   destape: `🚿 Perfecto. ¿En qué área estás (municipio o sector)?
 Luego cuéntame qué línea está tapada (fregadero, inodoro, principal, etc.).`,
@@ -83,7 +85,7 @@ Luego cuéntame qué línea está tapada (fregadero, inodoro, principal, etc.).`
   camara: `📹 Realizamos inspección con cámara. ¿En qué área la necesitas (baño, cocina, línea principal)?`,
   calentador: `🔥 Revisamos calentadores eléctricos o de gas. ¿Qué tipo tienes y qué problema notas?`,
   otro: `🧰 Cuéntame brevemente qué servicio necesitas y en qué área estás.`,
-  cita: `📅 Vamos a coordinar tu cita. Por favor envía en un solo mensaje:
+  cita: `📅 Por favor envía en un solo mensaje:
 👤 Nombre completo
 📞 Número de contacto (787/939 o EE.UU.)
 ⏰ Horario disponible
@@ -99,7 +101,7 @@ Then tell me which line is clogged (sink, toilet, main, etc.).`,
   camara: `📹 We perform camera inspections. In what area do you need it (bathroom, kitchen, main line)?`,
   calentador: `🔥 We service electric and gas heaters. What type do you have and what issue are you seeing?`,
   otro: `🧰 Please tell me briefly what service you need and where you are located.`,
-  cita: `📅 Let’s schedule your appointment. Please send the following in one message:
+  cita: `📅 Please send the following in one message:
 👤 Full name
 📞 Contact number (787/939 or US)
 ⏰ Available time
@@ -151,23 +153,35 @@ const KEYWORDS = {
   }
 };
 
+// ====== SQLite init + migración segura ======
 let db;
+async function ensureSchema(dbo) {
+  // Crea tabla si no existe (sin perder datos)
+  await dbo.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      from_number TEXT PRIMARY KEY
+    )
+  `);
+
+  // Lee columnas existentes
+  const cols = new Set((await dbo.all(`PRAGMA table_info(sessions)`)).map(r => r.name));
+
+  // Agrega columnas faltantes una a una
+  if (!cols.has("lang"))             await dbo.exec(`ALTER TABLE sessions ADD COLUMN lang TEXT DEFAULT 'es'`);
+  if (!cols.has("last_choice"))      await dbo.exec(`ALTER TABLE sessions ADD COLUMN last_choice TEXT`);
+  if (!cols.has("awaiting_details")) await dbo.exec(`ALTER TABLE sessions ADD COLUMN awaiting_details INTEGER DEFAULT 0`);
+  if (!cols.has("details"))          await dbo.exec(`ALTER TABLE sessions ADD COLUMN details TEXT`);
+  if (!cols.has("last_active"))      await dbo.exec(`ALTER TABLE sessions ADD COLUMN last_active INTEGER`);
+}
+
 async function initDB() {
   if (db) return db;
   db = await open({ filename: "./sessions.db", driver: sqlite3.Database });
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      from_number TEXT PRIMARY KEY,
-      lang TEXT DEFAULT 'es',
-      last_choice TEXT,
-      awaiting_details INTEGER DEFAULT 0,
-      details TEXT,
-      last_active INTEGER
-    )
-  `);
+  await ensureSchema(db);
   return db;
 }
 
+// ===== Utilidades =====
 function norm(s) {
   return String(s || "")
     .toLowerCase()
@@ -202,12 +216,13 @@ function twiml(text) {
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${safe}</Message></Response>`;
 }
 
+// ===== Endpoints básicos =====
 app.get("/", (_req, res) => res.send(`${TAG} DestapesPR Bot OK`));
 app.get("/__version", (_req, res) => res.json({ ok: true, tag: TAG, tz: "America/Puerto_Rico" }));
 
+// ===== Webhook WhatsApp =====
 app.post("/webhook/whatsapp", async (req, res) => {
   await initDB();
-  // 👇 esto fuerza UTF-8
   res.set("Content-Type", "application/xml; charset=utf-8");
 
   const from = String(req.body.From || req.body.from || req.body.WaId || "");
