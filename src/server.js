@@ -1,4 +1,4 @@
-// server.js — DestapesPR Bilingual Bot V5 🇵🇷
+// server.js — DestapesPR Bilingual Bot V5.1 🇵🇷
 // Requisitos: express, sqlite3, sqlite (npm i express sqlite sqlite3)
 
 import express from "express";
@@ -11,7 +11,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(morgan("tiny"));
 
-const TAG = "Bilingual Bot V5 🇵🇷";
+const TAG = "Bilingual Bot V5.1 🇵🇷";
 const PORT = process.env.PORT || 10000;
 const LINK_CITA = "https://wa.me/17879220068?text=Quiero%20agendar%20una%20cita";
 const PHONE_PRETTY = "+1 (787) 922-0068";
@@ -36,7 +36,6 @@ async function initDB() {
     );
   `);
 
-  // Migración idempotente: agrega columnas si faltan
   const pragma = await db.all(`PRAGMA table_info(sessions)`);
   const cols = new Set(pragma.map(c => c.name));
   const addCol = async (name, type, def = null) => {
@@ -90,13 +89,12 @@ async function clearSession(from) {
 // ===============
 // 🔡 Utilidades
 // ===============
-const N1 = "\u0031\uFE0F\u20E3"; // 1️⃣
-const N2 = "\u0032\uFE0F\u20E3"; // 2️⃣
-const N3 = "\u0033\uFE0F\u20E3"; // 3️⃣
-const N4 = "\u0034\uFE0F\u20E3"; // 4️⃣
-const N5 = "\u0035\uFE0F\u20E3"; // 5️⃣
-const N6 = "\u0036\uFE0F\u20E3"; // 6️⃣
-const N7 = "\u0037\uFE0F\u20E3"; // 7️⃣
+const N1 = "\u0031\uFE0F\u20E3";
+const N2 = "\u0032\uFE0F\u20E3";
+const N3 = "\u0033\uFE0F\u20E3";
+const N4 = "\u0034\uFE0F\u20E3";
+const N5 = "\u0035\uFE0F\u20E3";
+const N6 = "\u0036\uFE0F\u20E3";
 
 function escXml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -113,17 +111,9 @@ function norm(s) {
 }
 function detectLang(body) {
   const b = norm(body);
-  // Si explícitamente dice english / español
   if (/\b(english|ingl[eé]s)\b/.test(b)) return "en";
   if (/\b(espanol|espa[nñ]ol)\b/.test(b)) return "es";
-  // Heurística básica
-  const enWords = ["drain", "leak", "heater", "schedule", "appointment", "camera", "sink"];
-  const esWords = ["destape", "fuga", "calentador", "cita", "camara", "cámara", "inodoro", "fregadero"];
-  const hasEN = enWords.some(w => b.includes(w));
-  const hasES = esWords.some(w => b.includes(w));
-  if (hasEN && !hasES) return "en";
-  if (hasES && !hasEN) return "es";
-  return null; // indeterminado
+  return null;
 }
 
 // ==================
@@ -139,34 +129,25 @@ Gracias por su patrocinio.
 
 ${TAG}`.trim();
 
-const MENU_LANG_BILINGUAL = `
-🌐 *Ajustes de idioma / Language settings*
-Escribe *english* o *español* para cambiar.
-Type *english* or *español* to change.
-
-${FOOTER}
-`.trim();
-
 function mainMenu() {
   return (
 `🇵🇷 *Bienvenido a DestapesPR* 💧 / *Welcome to DestapesPR* 💧
 
-${N1} Destape / Drain cleaning
-${N2} Fuga / Leak
-${N3} Cámara / Camera inspection
-${N4} Calentador / Water heater
-${N5} Otro / Other service
-${N6} Cita / Appointment
-${N7} Idioma / Language
+${N1} Destape / Drain cleaning  
+${N2} Fuga / Leak  
+${N3} Cámara / Camera inspection  
+${N4} Calentador / Water heater  
+${N5} Otro / Other service  
+${N6} Cita / Appointment  
 
-Comandos: "inicio", "menu", "volver" / Commands: "start", "menu", "back"
+Commands: "start", "menu" or "back" to return to the menu.  
+To switch language, type *english* or *español*.
 
 ${TAG}`
   );
 }
 
 function promptFor(choice, lang = "es") {
-  // Plantillas ES/EN por servicio
   const sections = {
     es: {
       destape:
@@ -181,12 +162,10 @@ Vamos a coordinar. Por favor envía en un *solo mensaje*:
 *Ejemplo:*
 "Me llamo Ana Rivera, 939-555-9999, Caguas, inodoro, 10am–1pm"
 
-(Escribe "volver" para regresar al menú)
-
 ${FOOTER}`,
       fuga:
 `💧 *Fuga*
-Por favor envía en un *solo mensaje*:
+Por favor envía:
 👤 Nombre completo
 📞 Número (787/939 o EE. UU.)
 📍 Zona (municipio/sector)
@@ -234,8 +213,7 @@ También puedes escribir aquí:
 📍 Zona (municipio/sector)
 ⏰ Horario disponible
 
-${FOOTER}`,
-      idioma: MENU_LANG_BILINGUAL
+${FOOTER}`
     },
     en: {
       destape:
@@ -246,11 +224,6 @@ Please send in *one message*:
 📍 Area (city/neighborhood)
 🚿 Which line is clogged (sink, toilet, main, etc.)
 ⏰ Available time window
-
-*Example:*
-"My name is Ana Rivera, 939-555-9999, Caguas, toilet, 10am–1pm"
-
-(Type "back" to return to the menu)
 
 ${FOOTER}`,
       fuga:
@@ -303,52 +276,39 @@ Or write here:
 📍 Area (city/neighborhood)
 ⏰ Available time window
 
-${FOOTER}`,
-      idioma: MENU_LANG_BILINGUAL
+${FOOTER}`
     }
   };
 
-  // Mapea choice a clave
   const map = {
     destape: "destape",
     fuga: "fuga",
     camara: "camara",
     calentador: "calentador",
     otro: "otro",
-    cita: "cita",
-    idioma: "idioma"
+    cita: "cita"
   };
 
   const key = map[choice] || "otro";
   return sections[lang][key];
 }
 
-// ===========================
-// 🔎 Matching de palabras
-// ===========================
+// ===============
+// 🔎 Keywords
+// ===============
 const KEYWORDS = {
-  destape: ["destape", "tapon", "tapada", "drenaje", "desague", "drain", "clog"],
-  fuga: ["fuga", "filtracion", "humedad", "leak"],
-  camara: ["camara", "cámara", "video", "inspeccion", "camera"],
-  calentador: ["calentador", "heater", "agua caliente", "boiler"],
+  destape: ["destape", "tapado", "drenaje", "tuberia", "drain"],
+  fuga: ["fuga", "fugas", "agua", "filtracion", "leak"],
+  camara: ["camara", "cámara", "inspeccion", "camera"],
+  calentador: ["calentador", "heater", "gas", "electrico"],
   otro: ["otro", "consulta", "other"],
-  cita: ["cita", "appointment", "schedule", "agendar", "reservar"],
-  idioma: ["idioma", "lenguaje", "language", "lang", "english", "ingles", "inglés", "espanol", "español"]
+  cita: ["cita", "appointment", "agendar", "schedule"]
 };
-const NUMERIC = { "1": "destape", "2": "fuga", "3": "camara", "4": "calentador", "5": "otro", "6": "cita", "7": "idioma" };
+const NUMERIC = { "1": "destape", "2": "fuga", "3": "camara", "4": "calentador", "5": "otro", "6": "cita" };
 
-function detectChoice(text) {
-  const b = norm(text);
-  if (NUMERIC[b]) return NUMERIC[b];
-  for (const [choice, list] of Object.entries(KEYWORDS)) {
-    if (list.some(k => b.includes(k))) return choice;
-  }
-  return null;
-}
-
-// ===============
-// 🧭 Endpoints
-// ===============
+// ======================
+// 🚀 Webhook principal
+// ======================
 app.get("/__version", (_req, res) => {
   res.json({ ok: true, tag: TAG, tz: "America/Puerto_Rico" });
 });
@@ -361,79 +321,42 @@ app.post("/webhook/whatsapp", async (req, res) => {
     const bodyRaw = String(req.body.Body || req.body.body || "").trim();
     const body = norm(bodyRaw);
 
-    // comandos de menú
     if (!body || ["inicio", "menu", "volver", "start", "back"].includes(body)) {
       await clearSession(from);
-      await upsertSession(from, { lang: "es" }); // por defecto ES
       return res.type("application/xml").send(replyXML(mainMenu()));
     }
 
-    // manejo de idioma (set explícito)
     if (/\b(english|ingl[eé]s)\b/.test(body)) {
       await upsertSession(from, { lang: "en" });
-      const text = `✅ Language set: *English*.\n\n${MENU_LANG_BILINGUAL}`;
-      return res.type("application/xml").send(replyXML(text));
+      return res.type("application/xml").send(replyXML("✅ Language set to English.\n\n" + mainMenu()));
     }
     if (/\b(espanol|espa[nñ]ol)\b/.test(body)) {
       await upsertSession(from, { lang: "es" });
-      const text = `✅ Idioma establecido: *Español*.\n\n${MENU_LANG_BILINGUAL}`;
-      return res.type("application/xml").send(replyXML(text));
+      return res.type("application/xml").send(replyXML("✅ Idioma establecido a Español.\n\n" + mainMenu()));
     }
 
-    // heurística de idioma si viene sin fijar
     const sess0 = (await getSession(from)) || {};
-    const inferred = detectLang(bodyRaw);
-    const lang = sess0.lang || inferred || "es";
-
-    // ¿eligió opción?
-    const choice = detectChoice(bodyRaw);
+    const lang = sess0.lang || detectLang(bodyRaw) || "es";
+    const choice = NUMERIC[body] || Object.entries(KEYWORDS).find(([_, list]) =>
+      list.some(k => body.includes(k))
+    )?.[0];
 
     if (choice) {
-      // opción idioma (7): sólo mostrar instrucciones bilingües
-      if (choice === "idioma") {
-        await upsertSession(from, { last_choice: "idioma", awaiting_details: 0, lang });
-        return res.type("application/xml").send(replyXML(MENU_LANG_BILINGUAL));
-      }
-
-      // otras opciones: pedir detalles
-      await upsertSession(from, { last_choice: choice, awaiting_details: 1, details: null, lang });
+      await upsertSession(from, { last_choice: choice, awaiting_details: 1, lang });
       const ask = promptFor(choice, lang);
       return res.type("application/xml").send(replyXML(ask));
     }
 
-    // ¿estaba esperando detalles?
     const s = await getSession(from);
     if (s?.last_choice && s?.awaiting_details) {
       await upsertSession(from, { details: bodyRaw, awaiting_details: 0 });
-
-      const label = {
-        es: {
-          destape: "destape",
-          fuga: "fuga",
-          camara: "inspección con cámara",
-          calentador: "calentador",
-          otro: "otro servicio",
-          cita: "cita"
-        },
-        en: {
-          destape: "drain cleaning",
-          fuga: "leak",
-          camara: "camera inspection",
-          calentador: "water heater",
-          otro: "other service",
-          cita: "appointment"
-        }
-      }[s.lang || "es"][s.last_choice || "otro"];
-
       const confirm =
-        (s.lang === "en"
-          ? `✅ *Received.* I saved your details:\n"${bodyRaw}"\n\nService: ${label}\n\n${FOOTER}`
-          : `✅ *Recibido.* Guardé tus detalles:\n"${bodyRaw}"\n\nServicio: ${label}\n\n${FOOTER}`);
-
+        s.lang === "en"
+          ? `✅ *Received.* I saved your details:\n"${bodyRaw}"\n\nService: ${s.last_choice}\n\n${FOOTER}`
+          : `✅ *Recibido.* Guardé tus detalles:\n"${bodyRaw}"\n\nServicio: ${s.last_choice}\n\n${FOOTER}`;
       return res.type("application/xml").send(replyXML(confirm));
     }
 
-    // Fallback: menú principal
     return res.type("application/xml").send(replyXML(mainMenu()));
   } catch (e) {
     console.error("Webhook error:", e);
@@ -446,5 +369,5 @@ app.get("/", (_req, res) => {
 });
 
 app.listen(PORT, () => {
-  console.log(`💬 DestapesPR Bilingual Bot V5 listening on http://localhost:${PORT}`);
+  console.log(`💬 DestapesPR Bilingual Bot V5.1 listening on http://localhost:${PORT}`);
 });
