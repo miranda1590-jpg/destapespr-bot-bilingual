@@ -11,7 +11,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(morgan("tiny"));
 
-const TAG = "Bilingual Bot V5.1 🇵🇷";
+const TAG = "Bilingual Bot V5.1 🇵🇷 NO7";
 const PORT = process.env.PORT || 10000;
 const LINK_CITA = "https://wa.me/17879220068?text=Quiero%20agendar%20una%20cita";
 const PHONE_PRETTY = "+1 (787) 922-0068";
