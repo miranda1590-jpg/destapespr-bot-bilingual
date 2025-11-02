@@ -13,3 +13,7 @@ node_modules/
 patches/
 .DS_Store
 *.log
+.env
+logs
+node_modules
+sessions.db
