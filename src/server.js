@@ -1,173 +1,109 @@
+// server.js — DestapesPR Bilingual Bot V5 🇵🇷
+// Requisitos: express, sqlite3, sqlite (npm i express sqlite sqlite3)
+
 import express from "express";
 import morgan from "morgan";
 import sqlite3 from "sqlite3";
 import { open } from "sqlite";
 
 const app = express();
-const PORT = process.env.PORT || 10000;
-
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
-app.use(morgan("dev"));
+app.use(morgan("tiny"));
 
-const PHONE = "+17879220068";
-const FB_LINK = "https://www.facebook.com/destapesPR/";
-const TAG = "Bilingual Bot V5";
+const TAG = "Bilingual Bot V5 🇵🇷";
+const PORT = process.env.PORT || 10000;
+const LINK_CITA = "https://wa.me/17879220068?text=Quiero%20agendar%20una%20cita";
+const PHONE_PRETTY = "+1 (787) 922-0068";
+const FB_URL = "https://www.facebook.com/destapesPR/";
 
-// Números-emoji con escapes Unicode (para que SIEMPRE se vean):
+// =======================
+// 🗄️  SQLite (migraciones)
+// =======================
+let db;
+async function initDB() {
+  if (db) return db;
+  db = await open({ filename: "./sessions.db", driver: sqlite3.Database });
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      from_number TEXT PRIMARY KEY,
+      last_choice TEXT,
+      awaiting_details INTEGER DEFAULT 0,
+      details TEXT,
+      lang TEXT DEFAULT 'es',
+      last_active INTEGER
+    );
+  `);
+
+  // Migración idempotente: agrega columnas si faltan
+  const pragma = await db.all(`PRAGMA table_info(sessions)`);
+  const cols = new Set(pragma.map(c => c.name));
+  const addCol = async (name, type, def = null) => {
+    if (!cols.has(name)) {
+      await db.exec(
+        `ALTER TABLE sessions ADD COLUMN ${name} ${type}` + (def ? ` DEFAULT ${def}` : "")
+      );
+    }
+  };
+  await addCol("last_choice", "TEXT");
+  await addCol("awaiting_details", "INTEGER", 0);
+  await addCol("details", "TEXT");
+  await addCol("lang", "TEXT", "'es'");
+  await addCol("last_active", "INTEGER");
+
+  return db;
+}
+
+async function getSession(from) {
+  return db.get(`SELECT * FROM sessions WHERE from_number = ?`, from);
+}
+async function upsertSession(from, patch = {}) {
+  const now = Date.now();
+  const prev = (await getSession(from)) || {};
+  const next = {
+    last_choice: patch.last_choice ?? prev.last_choice ?? null,
+    awaiting_details: patch.awaiting_details ?? prev.awaiting_details ?? 0,
+    details: patch.details ?? prev.details ?? null,
+    lang: patch.lang ?? prev.lang ?? "es",
+    last_active: now
+  };
+  await db.run(
+    `
+    INSERT INTO sessions (from_number, last_choice, awaiting_details, details, lang, last_active)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(from_number) DO UPDATE SET
+      last_choice = excluded.last_choice,
+      awaiting_details = excluded.awaiting_details,
+      details = excluded.details,
+      lang = excluded.lang,
+      last_active = excluded.last_active
+  `,
+    [from, next.last_choice, next.awaiting_details, next.details, next.lang, next.last_active]
+  );
+  return next;
+}
+async function clearSession(from) {
+  await db.run(`DELETE FROM sessions WHERE from_number = ?`, from);
+}
+
+// ===============
+// 🔡 Utilidades
+// ===============
 const N1 = "\u0031\uFE0F\u20E3"; // 1️⃣
 const N2 = "\u0032\uFE0F\u20E3"; // 2️⃣
 const N3 = "\u0033\uFE0F\u20E3"; // 3️⃣
 const N4 = "\u0034\uFE0F\u20E3"; // 4️⃣
 const N5 = "\u0035\uFE0F\u20E3"; // 5️⃣
 const N6 = "\u0036\uFE0F\u20E3"; // 6️⃣
+const N7 = "\u0037\uFE0F\u20E3"; // 7️⃣
 
-const FOOTER_ES = `
-✅ Próximamente nos estaremos comunicando.
-Gracias por su patrocinio.
-— DestapesPR 🇵🇷
-
-📞 ${PHONE}
-📘 Facebook: ${FB_LINK}
-
-🤖 Bilingual Bot V5`;
-
-const FOOTER_EN = `
-✅ We will contact you shortly.
-Thank you for your business.
-— DestapesPR 🇵🇷
-
-📞 ${PHONE}
-📘 Facebook: ${FB_LINK}
-
-🤖 Bilingual Bot V5`;
-
-const MAIN_MENU_ES = `
-🇵🇷 *Bienvenido a DestapesPR Bilingual Bot* 🤖
-
-Selecciona una opción escribiendo el número o la palabra:
-
-${N1}  Destape (drenajes o tuberías tapadas)
-${N2}  Fuga (fugas de agua)
-${N3}  Cámara (inspección con cámara)
-${N4}  Calentador (gas o eléctrico)
-${N5}  Otro servicio
-${N6}  Cita o agendar servicio
-
-📞 Teléfono directo: ${PHONE}
-📘 Facebook: ${FB_LINK}
-
-Comandos: "inicio", "menu" o "volver" para regresar al menú.`;
-
-const MAIN_MENU_EN = `
-🇵🇷 *Welcome to DestapesPR Bilingual Bot* 🤖
-
-Please select a service by typing the number or the word:
-
-${N1}  Unclog (drains or blocked pipes)
-${N2}  Leak (water leaks)
-${N3}  Camera (pipe inspection)
-${N4}  Heater (gas or electric)
-${N5}  Other service
-${N6}  Schedule an appointment
-
-📞 Direct line: ${PHONE}
-📘 Facebook: ${FB_LINK}
-
-Commands: "start", "menu" or "back" to return to the menu.`;
-
-const RESP_ES = {
-  destape: `🚿 Perfecto. ¿En qué área estás (municipio o sector)?
-Luego cuéntame qué línea está tapada (fregadero, inodoro, principal, etc.).`,
-  fuga: `💧 Entendido. ¿Dónde notas la fuga o humedad? ¿Es dentro o fuera de la propiedad?`,
-  camara: `📹 Realizamos inspección con cámara. ¿En qué área la necesitas (baño, cocina, línea principal)?`,
-  calentador: `🔥 Revisamos calentadores eléctricos o de gas. ¿Qué tipo tienes y qué problema notas?`,
-  otro: `🧰 Cuéntame brevemente qué servicio necesitas y en qué área estás.`,
-  cita: `📅 Vamos a coordinar tu cita. Por favor envía en un solo mensaje:
-👤 Nombre completo
-📞 Número de contacto (787/939 o EE.UU.)
-⏰ Horario disponible
-
-Ejemplo:
-"Me llamo Ana Rivera, 939-555-9999, 10am-1pm en Caguas"`
-};
-
-const RESP_EN = {
-  destape: `🚿 Great! Which area are you in (city or sector)?
-Then tell me which line is clogged (sink, toilet, main, etc.).`,
-  fuga: `💧 Got it. Where do you notice the leak or moisture? Inside or outside the property?`,
-  camara: `📹 We perform camera inspections. In what area do you need it (bathroom, kitchen, main line)?`,
-  calentador: `🔥 We service electric and gas heaters. What type do you have and what issue are you seeing?`,
-  otro: `🧰 Please tell me briefly what service you need and where you are located.`,
-  cita: `📅 Let’s schedule your appointment. Please send the following in one message:
-👤 Full name
-📞 Contact number (787/939 or US)
-⏰ Available time
-
-Example:
-"My name is Ana Rivera, 939-555-9999, 10am-1pm in Caguas"`
-};
-
-const SERVICE_LABEL = {
-  es: { destape: "destape", fuga: "fuga", camara: "cámara", calentador: "calentador", otro: "otro", cita: "cita" },
-  en: { destape: "unclog", fuga: "leak", camara: "camera", calentador: "heater", otro: "other", cita: "appointment" }
-};
-
-const CHOICES = {
-  es: {
-    "1": "destape", [N1]: "destape", "destape": "destape",
-    "2": "fuga",    [N2]: "fuga",    "fuga": "fuga",
-    "3": "camara",  [N3]: "camara",  "cámara": "camara", "camara": "camara",
-    "4": "calentador",[N4]:"calentador","calentador":"calentador",
-    "5": "otro",    [N5]: "otro",    "otro": "otro",
-    "6": "cita",    [N6]: "cita",    "cita": "cita", "agendar": "cita", "reservar": "cita"
-  },
-  en: {
-    "1": "destape", [N1]:"destape", "unclog":"destape","clog":"destape","blocked":"destape",
-    "2": "fuga",    [N2]:"fuga",    "leak":"fuga",
-    "3": "camara",  [N3]:"camara",  "camera":"camara","inspection":"camara",
-    "4": "calentador",[N4]:"calentador","heater":"calentador","hot water":"calentador",
-    "5": "otro",    [N5]:"otro",    "other":"otro","help":"otro","service":"otro",
-    "6": "cita",    [N6]:"cita",    "appointment":"cita","schedule":"cita","book":"cita"
-  }
-};
-
-const KEYWORDS = {
-  es: {
-    destape: ["destape","tapado","obstruccion","obstrucción","fregadero","inodoro","toilet","principal","drenaje","desagüe","desague","trancado"],
-    fuga: ["fuga","salidero","goteo","humedad","filtración","filtracion","escape","charco"],
-    camara: ["cámara","camara","inspección","inspeccion","video","ver tubería","ver tuberia","localizar"],
-    calentador: ["calentador","agua caliente","boiler","gas","eléctrico","electrico"],
-    otro: ["otro","servicio","ayuda","consulta","presupuesto","cotización","cotizacion"],
-    cita: ["cita","agendar","agenda","reservar"]
-  },
-  en: {
-    destape: ["unclog","clog","blocked","drain","sink","toilet","main line"],
-    fuga: ["leak","moisture","drip","water leak"],
-    camara: ["camera","inspection","pipe video"],
-    calentador: ["heater","hot water","boiler","gas","electric"],
-    otro: ["other","service","help","quote"],
-    cita: ["appointment","schedule","book","reserve"]
-  }
-};
-
-let db;
-async function initDB() {
-  if (db) return db;
-  db = await open({ filename: "./sessions.db", driver: sqlite3.Database });
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      from_number TEXT PRIMARY KEY,
-      lang TEXT DEFAULT 'es',
-      last_choice TEXT,
-      awaiting_details INTEGER DEFAULT 0,
-      details TEXT,
-      last_active INTEGER
-    )
-  `);
-  return db;
+function escXml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
-
+function replyXML(text) {
+  return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escXml(text)}</Message></Response>`;
+}
 function norm(s) {
   return String(s || "")
     .toLowerCase()
@@ -175,105 +111,340 @@ function norm(s) {
     .replace(/\p{Diacritic}/gu, "")
     .trim();
 }
-
-function detectLang(s) {
-  const t = s || "";
-  const englishHints = /\b(unclog|leak|camera|heater|appointment|schedule|book|other)\b/i.test(t);
-  const hasAccents = /[áéíóúñÁÉÍÓÚÑ]/.test(t);
-  if (englishHints) return "en";
-  if (hasAccents) return "es";
-  if (/[a-z]/i.test(t) && !/[áéíóúñ]/i.test(t)) return "en";
-  return "es";
+function detectLang(body) {
+  const b = norm(body);
+  // Si explícitamente dice english / español
+  if (/\b(english|ingl[eé]s)\b/.test(b)) return "en";
+  if (/\b(espanol|espa[nñ]ol)\b/.test(b)) return "es";
+  // Heurística básica
+  const enWords = ["drain", "leak", "heater", "schedule", "appointment", "camera", "sink"];
+  const esWords = ["destape", "fuga", "calentador", "cita", "camara", "cámara", "inodoro", "fregadero"];
+  const hasEN = enWords.some(w => b.includes(w));
+  const hasES = esWords.some(w => b.includes(w));
+  if (hasEN && !hasES) return "en";
+  if (hasES && !hasEN) return "es";
+  return null; // indeterminado
 }
 
-function chooseByNumberOrWord(body, lang) {
-  const t = norm(body);
-  const map = CHOICES[lang];
-  if (map[t]) return map[t];
-  const kw = KEYWORDS[lang];
-  for (const [srv, arr] of Object.entries(kw)) {
-    if (arr.some(k => t.includes(norm(k)))) return srv;
+// ==================
+// 📋 Textos / Menús
+// ==================
+const FOOTER = `
+✅ Próximamente nos estaremos comunicando.
+Gracias por su patrocinio.
+— DestapesPR 🇵🇷
+
+📞 ${PHONE_PRETTY}
+🔗 Facebook: ${FB_URL}
+
+${TAG}`.trim();
+
+const MENU_LANG_BILINGUAL = `
+🌐 *Ajustes de idioma / Language settings*
+Escribe *english* o *español* para cambiar.
+Type *english* or *español* to change.
+
+${FOOTER}
+`.trim();
+
+function mainMenu() {
+  return (
+`🇵🇷 *Bienvenido a DestapesPR* 💧 / *Welcome to DestapesPR* 💧
+
+${N1} Destape / Drain cleaning
+${N2} Fuga / Leak
+${N3} Cámara / Camera inspection
+${N4} Calentador / Water heater
+${N5} Otro / Other service
+${N6} Cita / Appointment
+${N7} Idioma / Language
+
+Comandos: "inicio", "menu", "volver" / Commands: "start", "menu", "back"
+
+${TAG}`
+  );
+}
+
+function promptFor(choice, lang = "es") {
+  // Plantillas ES/EN por servicio
+  const sections = {
+    es: {
+      destape:
+`🛠️ *Destape*
+Vamos a coordinar. Por favor envía en un *solo mensaje*:
+👤 Nombre completo
+📞 Número (787/939 o EE. UU.)
+📍 Zona (municipio/sector)
+🚿 Qué línea está tapada (fregadero, inodoro, principal, etc.)
+⏰ Horario disponible
+
+*Ejemplo:*
+"Me llamo Ana Rivera, 939-555-9999, Caguas, inodoro, 10am–1pm"
+
+(Escribe "volver" para regresar al menú)
+
+${FOOTER}`,
+      fuga:
+`💧 *Fuga*
+Por favor envía en un *solo mensaje*:
+👤 Nombre completo
+📞 Número (787/939 o EE. UU.)
+📍 Zona (municipio/sector)
+💦 Dónde notas la fuga (pared, piso, techo, interior/exterior)
+⏰ Horario disponible
+
+${FOOTER}`,
+      camara:
+`🎥 *Inspección con cámara*
+Por favor envía:
+👤 Nombre completo
+📞 Número (787/939 o EE. UU.)
+📍 Zona (municipio/sector)
+📌 Área a inspeccionar (baño, cocina, línea principal)
+⏰ Horario disponible
+
+${FOOTER}`,
+      calentador:
+`🔥 *Calentador*
+Por favor envía:
+👤 Nombre completo
+📞 Número (787/939 o EE. UU.)
+📍 Zona (municipio/sector)
+⚙️ Tipo y problema (gas/eléctrico, no enciende, fuga, etc.)
+⏰ Horario disponible
+
+${FOOTER}`,
+      otro:
+`🧰 *Otro servicio*
+Por favor envía:
+👤 Nombre completo
+📞 Número (787/939 o EE. UU.)
+📍 Zona (municipio/sector)
+📝 Breve descripción
+⏰ Horario disponible
+
+${FOOTER}`,
+      cita:
+`📅 *Cita / Appointment*
+Si prefieres, puedes abrir este enlace para coordinar: ${LINK_CITA}
+
+También puedes escribir aquí:
+👤 Nombre completo
+📞 Número (787/939 o EE. UU.)
+📍 Zona (municipio/sector)
+⏰ Horario disponible
+
+${FOOTER}`,
+      idioma: MENU_LANG_BILINGUAL
+    },
+    en: {
+      destape:
+`🛠️ *Drain cleaning*
+Please send in *one message*:
+👤 Full name
+📞 Phone (US/PR)
+📍 Area (city/neighborhood)
+🚿 Which line is clogged (sink, toilet, main, etc.)
+⏰ Available time window
+
+*Example:*
+"My name is Ana Rivera, 939-555-9999, Caguas, toilet, 10am–1pm"
+
+(Type "back" to return to the menu)
+
+${FOOTER}`,
+      fuga:
+`💧 *Leak*
+Please send:
+👤 Full name
+📞 Phone (US/PR)
+📍 Area (city/neighborhood)
+💦 Where is the leak (wall, floor, ceiling, inside/outside)
+⏰ Available time window
+
+${FOOTER}`,
+      camara:
+`🎥 *Camera inspection*
+Please send:
+👤 Full name
+📞 Phone (US/PR)
+📍 Area (city/neighborhood)
+📌 Area to inspect (bathroom, kitchen, main line)
+⏰ Available time window
+
+${FOOTER}`,
+      calentador:
+`🔥 *Water heater*
+Please send:
+👤 Full name
+📞 Phone (US/PR)
+📍 Area (city/neighborhood)
+⚙️ Type and issue (gas/electric, won’t start, leak, etc.)
+⏰ Available time window
+
+${FOOTER}`,
+      otro:
+`🧰 *Other service*
+Please send:
+👤 Full name
+📞 Phone (US/PR)
+📍 Area (city/neighborhood)
+📝 Short description
+⏰ Available time window
+
+${FOOTER}`,
+      cita:
+`📅 *Appointment*
+You can also use this link to coordinate: ${LINK_CITA}
+
+Or write here:
+👤 Full name
+📞 Phone (US/PR)
+📍 Area (city/neighborhood)
+⏰ Available time window
+
+${FOOTER}`,
+      idioma: MENU_LANG_BILINGUAL
+    }
+  };
+
+  // Mapea choice a clave
+  const map = {
+    destape: "destape",
+    fuga: "fuga",
+    camara: "camara",
+    calentador: "calentador",
+    otro: "otro",
+    cita: "cita",
+    idioma: "idioma"
+  };
+
+  const key = map[choice] || "otro";
+  return sections[lang][key];
+}
+
+// ===========================
+// 🔎 Matching de palabras
+// ===========================
+const KEYWORDS = {
+  destape: ["destape", "tapon", "tapada", "drenaje", "desague", "drain", "clog"],
+  fuga: ["fuga", "filtracion", "humedad", "leak"],
+  camara: ["camara", "cámara", "video", "inspeccion", "camera"],
+  calentador: ["calentador", "heater", "agua caliente", "boiler"],
+  otro: ["otro", "consulta", "other"],
+  cita: ["cita", "appointment", "schedule", "agendar", "reservar"],
+  idioma: ["idioma", "lenguaje", "language", "lang", "english", "ingles", "inglés", "espanol", "español"]
+};
+const NUMERIC = { "1": "destape", "2": "fuga", "3": "camara", "4": "calentador", "5": "otro", "6": "cita", "7": "idioma" };
+
+function detectChoice(text) {
+  const b = norm(text);
+  if (NUMERIC[b]) return NUMERIC[b];
+  for (const [choice, list] of Object.entries(KEYWORDS)) {
+    if (list.some(k => b.includes(k))) return choice;
   }
   return null;
 }
 
-function twiml(text) {
-  const safe = String(text).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${safe}</Message></Response>`;
-}
-
-app.get("/", (_req, res) => res.send(`${TAG} DestapesPR Bot OK`));
-app.get("/__version", (_req, res) => res.json({ ok: true, tag: TAG, tz: "America/Puerto_Rico" }));
+// ===============
+// 🧭 Endpoints
+// ===============
+app.get("/__version", (_req, res) => {
+  res.json({ ok: true, tag: TAG, tz: "America/Puerto_Rico" });
+});
 
 app.post("/webhook/whatsapp", async (req, res) => {
-  await initDB();
-  res.set("Content-Type", "application/xml");
+  try {
+    await initDB();
 
-  const from = String(req.body.From || req.body.from || req.body.WaId || "");
-  const bodyRaw = String(req.body.Body || req.body.body || "");
-  const body = bodyRaw.trim();
+    const from = String(req.body.From || req.body.from || req.body.WaId || "").trim();
+    const bodyRaw = String(req.body.Body || req.body.body || "").trim();
+    const body = norm(bodyRaw);
 
-  let s = await db.get("SELECT * FROM sessions WHERE from_number = ?", from);
-  if (!s) {
-    const lang0 = detectLang(body);
-    await db.run(
-      "INSERT INTO sessions (from_number, lang, last_choice, awaiting_details, details, last_active) VALUES (?, ?, NULL, 0, NULL, ?)",
-      from, lang0, Date.now()
-    );
-    s = { from_number: from, lang: lang0, last_choice: null, awaiting_details: 0, details: null };
-  } else {
-    await db.run("UPDATE sessions SET last_active=? WHERE from_number=?", Date.now(), from);
+    // comandos de menú
+    if (!body || ["inicio", "menu", "volver", "start", "back"].includes(body)) {
+      await clearSession(from);
+      await upsertSession(from, { lang: "es" }); // por defecto ES
+      return res.type("application/xml").send(replyXML(mainMenu()));
+    }
+
+    // manejo de idioma (set explícito)
+    if (/\b(english|ingl[eé]s)\b/.test(body)) {
+      await upsertSession(from, { lang: "en" });
+      const text = `✅ Language set: *English*.\n\n${MENU_LANG_BILINGUAL}`;
+      return res.type("application/xml").send(replyXML(text));
+    }
+    if (/\b(espanol|espa[nñ]ol)\b/.test(body)) {
+      await upsertSession(from, { lang: "es" });
+      const text = `✅ Idioma establecido: *Español*.\n\n${MENU_LANG_BILINGUAL}`;
+      return res.type("application/xml").send(replyXML(text));
+    }
+
+    // heurística de idioma si viene sin fijar
+    const sess0 = (await getSession(from)) || {};
+    const inferred = detectLang(bodyRaw);
+    const lang = sess0.lang || inferred || "es";
+
+    // ¿eligió opción?
+    const choice = detectChoice(bodyRaw);
+
+    if (choice) {
+      // opción idioma (7): sólo mostrar instrucciones bilingües
+      if (choice === "idioma") {
+        await upsertSession(from, { last_choice: "idioma", awaiting_details: 0, lang });
+        return res.type("application/xml").send(replyXML(MENU_LANG_BILINGUAL));
+      }
+
+      // otras opciones: pedir detalles
+      await upsertSession(from, { last_choice: choice, awaiting_details: 1, details: null, lang });
+      const ask = promptFor(choice, lang);
+      return res.type("application/xml").send(replyXML(ask));
+    }
+
+    // ¿estaba esperando detalles?
+    const s = await getSession(from);
+    if (s?.last_choice && s?.awaiting_details) {
+      await upsertSession(from, { details: bodyRaw, awaiting_details: 0 });
+
+      const label = {
+        es: {
+          destape: "destape",
+          fuga: "fuga",
+          camara: "inspección con cámara",
+          calentador: "calentador",
+          otro: "otro servicio",
+          cita: "cita"
+        },
+        en: {
+          destape: "drain cleaning",
+          fuga: "leak",
+          camara: "camera inspection",
+          calentador: "water heater",
+          otro: "other service",
+          cita: "appointment"
+        }
+      }[s.lang || "es"][s.last_choice || "otro"];
+
+      const confirm =
+        (s.lang === "en"
+          ? `✅ *Received.* I saved your details:\n"${bodyRaw}"\n\nService: ${label}\n\n${FOOTER}`
+          : `✅ *Recibido.* Guardé tus detalles:\n"${bodyRaw}"\n\nServicio: ${label}\n\n${FOOTER}`);
+
+      return res.type("application/xml").send(replyXML(confirm));
+    }
+
+    // Fallback: menú principal
+    return res.type("application/xml").send(replyXML(mainMenu()));
+  } catch (e) {
+    console.error("Webhook error:", e);
+    return res.status(200).type("application/xml").send(replyXML("Lo siento, ocurrió un error. / Sorry, an error occurred."));
   }
+});
 
-  const lang = s.lang || detectLang(body);
-  const MENU = lang === "en" ? MAIN_MENU_EN : MAIN_MENU_ES;
-  const RESP = lang === "en" ? RESP_EN : RESP_ES;
-  const FOOT = lang === "en" ? FOOTER_EN : FOOTER_ES;
-
-  const cmd = norm(body);
-  if (["inicio","menu","volver","start","back"].includes(cmd)) {
-    await db.run("UPDATE sessions SET last_choice=NULL, awaiting_details=0, details=NULL WHERE from_number=?", from);
-    return res.status(200).send(twiml(MENU));
-  }
-
-  const detected = chooseByNumberOrWord(body, lang);
-  if (detected) {
-    await db.run(
-      "UPDATE sessions SET last_choice=?, awaiting_details=1, details=NULL, lang=? WHERE from_number=?",
-      detected, lang, from
-    );
-    const msg = `${RESP[detected]}
-
-${lang==="en" ? "Please send in one message:" : "Por favor envía en un solo mensaje:"}
-👤 ${lang==="en"?"Full name":"Nombre completo"}
-📞 ${lang==="en"?"Contact number (787/939 or US)":"Número de contacto (787/939 o EE.UU.)"}
-⏰ ${lang==="en"?"Available time":"Horario disponible"}
-
-${lang==="en"
-  ? 'Example:\n"My name is Ana Rivera, 939-555-9999, 10am-1pm in Caguas"'
-  : 'Ejemplo:\n"Me llamo Ana Rivera, 939-555-9999, 10am-1pm en Caguas"'}\n\n${FOOT}`;
-    return res.status(200).send(twiml(msg));
-  }
-
-  if (s.last_choice && s.awaiting_details) {
-    await db.run("UPDATE sessions SET details=?, awaiting_details=0 WHERE from_number=?", bodyRaw, from);
-    const lbl = SERVICE_LABEL[lang]?.[s.last_choice] || s.last_choice;
-    const confirm = lang === "en"
-      ? `✅ Received. I saved your details:\n"${bodyRaw}"\n\nService: ${lbl}\n\n${FOOT}`
-      : `✅ Recibido. Guardé tus detalles:\n"${bodyRaw}"\n\nServicio: ${lbl}\n\n${FOOT}`;
-    return res.status(200).send(twiml(confirm));
-  }
-
-  if (["facebook","fb"].includes(cmd)) {
-    const fbMsg = lang==="en"
-      ? `📘 Our Facebook page:\n${FB_LINK}\n\n${FOOT}`
-      : `📘 Nuestra página de Facebook:\n${FB_LINK}\n\n${FOOT}`;
-    return res.status(200).send(twiml(fbMsg));
-  }
-
-  return res.status(200).send(twiml(MENU));
+app.get("/", (_req, res) => {
+  res.send(`${TAG} activo ✅`);
 });
 
 app.listen(PORT, () => {
-  console.log(`💬 DestapesPR Bilingual Bot listening on http://localhost:${PORT}`);
+  console.log(`💬 DestapesPR Bilingual Bot V5 listening on http://localhost:${PORT}`);
 });
