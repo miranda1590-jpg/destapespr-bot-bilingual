@@ -34,7 +34,7 @@ async function initDB() {
     );
   `);
 
-  // Pequeña migración defensiva por si viene de versiones viejas
+  // Migración defensiva por si viene de versiones viejas
   const cols = await db.all(`PRAGMA table_info(sessions);`);
   const names = cols.map(c => c.name);
   const migrations = [];
@@ -97,19 +97,17 @@ function norm(text) {
     .trim();
 }
 
-// Detección de idioma muy simple ES / EN
+// Detección simple ES / EN
 function detectLang(bodyRaw, prevLang = 'es') {
   const t = norm(bodyRaw);
 
-  if (/^(english|inglés|ingles)\b/.test(t)) return 'en';
+  if (/^(english|ingles|inglés)\b/.test(t)) return 'en';
   if (/^(espanol|español|spanish)\b/.test(t)) return 'es';
 
-  // Palabras típicas en inglés
   if (/\b(drain|clog|leak|camera|heater|water|sink|kitchen|bathroom|appointment)\b/i.test(bodyRaw)) {
     return 'en';
   }
 
-  // Acentos o palabras muy ES
   if (/[áéíóúñ]/i.test(bodyRaw) || /\b(fregadero|inodoro|bañera|ducha|fuga|calentador|destape)\b/i.test(bodyRaw)) {
     return 'es';
   }
@@ -117,7 +115,7 @@ function detectLang(bodyRaw, prevLang = 'es') {
   return prevLang || 'es';
 }
 
-// ===== CLASIFICACIÓN DE SERVICIO (INTELIGENTE, FLEXIBLE) =====
+// ===== CLASIFICACIÓN DE SERVICIO =====
 const SERVICE_KEYS = {
   destape: {
     numbers: ['1'],
@@ -236,14 +234,12 @@ const SERVICE_KEYS = {
 function classifyService(bodyRaw) {
   const t = norm(bodyRaw);
 
-  // Sólo el número "1", "2", etc.
   if (/^[1-6]$/.test(t)) {
     for (const [service, cfg] of Object.entries(SERVICE_KEYS)) {
       if (cfg.numbers.includes(t)) return service;
     }
   }
 
-  // Palabra de servicio
   for (const [service, cfg] of Object.entries(SERVICE_KEYS)) {
     if (cfg.keywords.some(k => t.includes(k))) return service;
   }
@@ -254,12 +250,16 @@ function classifyService(bodyRaw) {
 // ===== TEXTOS =====
 function buildMenu(lang) {
   const baseFooter =
-    '📞 Teléfono: 787-922-0068\n' +
+    '📞 Teléfono / Phone: 787-922-0068\n' +
     '📘 Facebook: https://www.facebook.com/destapesPR/\n';
 
   if (lang === 'en') {
     return (
-      '👋 Welcome to DestapesPR.\n\n' +
+      '✅ Language set to English.\n\n' +
+      '👋 DestapesPR – Customer service\n\n' +
+      '🌐 Language / Idioma\n' +
+      '• Type "english" to stay in English\n' +
+      '• Escribe "español" para cambiar a español\n\n' +
       'Please select a number or type the service you need:\n\n' +
       '1️⃣ Drain cleaning (clogs / blocked drains)\n' +
       '2️⃣ Water leak (leaks / moisture)\n' +
@@ -267,23 +267,31 @@ function buildMenu(lang) {
       '4️⃣ Water heater (gas or electric)\n' +
       '5️⃣ Other plumbing service\n' +
       '6️⃣ Schedule an appointment\n\n' +
-      'Commands: type "start", "menu" or "back" to return to this menu.\n\n' +
+      'Commands:\n' +
+      'Type "start", "menu" or "back" to return to this menu.\n' +
+      'Type "spanish" or "español" to switch to Spanish.\n\n' +
       baseFooter +
-      '\n— DestapesPR 🇵🇷 – ES/EN bilingual'
+      '\n— DestapesPR 🇵🇷 – Bilingual ES/EN'
     );
   }
 
   // Español
   return (
-    '👋 Bienvenido a DestapesPR.\n\n' +
+    '✅ Idioma establecido a español.\n\n' +
+    '👋 DestapesPR – Servicio al cliente\n\n' +
+    '🌐 Idioma / Language\n' +
+    '• Escribe "español" para continuar en español\n' +
+    '• Type "english" to switch to English\n\n' +
     'Por favor, selecciona un número o escribe el servicio que necesitas:\n\n' +
-    '1️⃣ Destape (drenajes o tuberías tapadas)\n' +
-    '2️⃣ Fuga de agua (goteos / filtraciones)\n' +
+    '1️⃣ Destape (drenajes/tuberías tapadas)\n' +
+    '2️⃣ Fuga de agua\n' +
     '3️⃣ Inspección con cámara\n' +
-    '4️⃣ Calentador de agua (gas o eléctrico)\n' +
-    '5️⃣ Otro servicio de plomería\n' +
-    '6️⃣ Cita / coordinar visita\n\n' +
-    'Comandos: escribe "inicio", "menu" o "volver" para regresar a este menú.\n\n' +
+    '4️⃣ Calentador de agua\n' +
+    '5️⃣ Otro servicio\n' +
+    '6️⃣ Cita\n\n' +
+    '🧾 Comandos:\n' +
+    'Escribe "inicio", "menu" o "volver" para regresar a este menú.\n' +
+    'Escribe "english" para cambiar a inglés.\n\n' +
     baseFooter +
     '\n— DestapesPR 🇵🇷 – Bot bilingüe ES/EN'
   );
@@ -308,13 +316,12 @@ function buildServicePrompt(lang, service) {
       '📍 City / Area\n' +
       '📝 Short description of the issue\n\n' +
       'Example:\n' +
-      `"I\'m Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"\n\n` +
+      `"I'm Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"\n\n` +
       'We will review your information and contact you as soon as possible.\n' +
-      'Thanks for choosing DestapesPR 🇵🇷'
+      'Thank you for choosing DestapesPR 🇵🇷'
     );
   }
 
-  // Español
   return (
     `✅ Servicio seleccionado: ${titles[service]}\n\n` +
     'Vamos a coordinar. Por favor envía *todo en un solo mensaje*:\n' +
@@ -350,7 +357,6 @@ function buildFinalThanks(lang, service, detailsText) {
     );
   }
 
-  // Español
   return (
     `✅ Perfecto. Guardé tus datos para *${titles[service] || 'servicio'}*:\n` +
     `"${detailsText}"\n\n` +
@@ -391,30 +397,28 @@ app.post('/webhook/whatsapp', async (req, res) => {
     let session = await getSession(from);
     let lang = detectLang(bodyRaw, session?.lang || 'es');
 
-    // Comandos de menú (siempre prevalecen)
     const isMenuCmd =
       ['inicio', 'menu', 'menú', 'volver'].includes(bodyNorm) ||
       ['start', 'menu', 'back', 'help', 'hi', 'hello'].includes(bodyNorm);
 
-    // Cambio explícito de idioma (aunque ya no lo anunciemos)
-    if (/^\s*(english|inglés|ingles)\s*$/i.test(bodyRaw)) {
+    // Cambio explícito de idioma
+    if (/^\s*(english|ingles|inglés)\s*$/i.test(bodyRaw)) {
       lang = 'en';
-      session = await saveSession(from, { lang, awaiting_details: 0 });
+      session = await saveSession(from, { lang, awaiting_details: 0, last_service: null });
       return sendTwilioXML(res, buildMenu(lang));
     }
     if (/^\s*(espanol|español|spanish)\s*$/i.test(bodyRaw)) {
       lang = 'es';
-      session = await saveSession(from, { lang, awaiting_details: 0 });
+      session = await saveSession(from, { lang, awaiting_details: 0, last_service: null });
       return sendTwilioXML(res, buildMenu(lang));
     }
 
-    // Menú directo
     if (!bodyRaw || isMenuCmd) {
       await saveSession(from, { lang, awaiting_details: 0, last_service: null });
       return sendTwilioXML(res, buildMenu(lang));
     }
 
-    // Si estamos esperando detalles, CUALQUIER cosa se toma como detalles finales
+    // Si estamos esperando detalles
     if (session?.awaiting_details && session.last_service) {
       await saveSession(from, {
         lang,
@@ -425,7 +429,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       return sendTwilioXML(res, reply);
     }
 
-    // Si no estamos esperando detalles, clasificar servicio
+    // Clasificar servicio
     const service = classifyService(bodyRaw);
     if (service) {
       await saveSession(from, {
