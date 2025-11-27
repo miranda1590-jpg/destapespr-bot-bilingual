@@ -184,9 +184,18 @@ Thank you for your business.
 
 🤖 DestapesPR Bot 5 Pro 🇵🇷`;
 
+// 🔹 MENÚ PRINCIPAL – AHORA PRIMERO COMANDOS + FB (BILINGÜE)
 function mainMenu(lang) {
   if (lang === 'en') {
     return `${TAG}
+
+🔁 Commands / Comandos:
+• "start", "menu" or "back" → main menu
+• "inicio", "menu" o "volver" → menú principal
+• To switch language / Cambiar idioma: type / escribe "english" o "español".
+
+📘 Facebook: ${FACEBOOK}
+☎️ Phone / Teléfono: ${PHONE}
 
 🇵🇷 Welcome to DestapesPR (Puerto Rico).
 
@@ -197,14 +206,18 @@ Please type the number or the word of the service you need:
 3️⃣ - Camera inspection
 4️⃣ - Water heater (gas or electric)
 5️⃣ - Other service
-6️⃣ - Appointment / Schedule
-
-Commands:
-• "start", "menu" or "back" to return to this menu.
-• To switch language, type: english or español.`;
+6️⃣ - Appointment / Schedule`;
   }
 
   return `${TAG}
+
+🔁 Comandos / Commands:
+• "inicio", "menu" o "volver" → menú principal
+• "start", "menu" or "back" → main menu
+• Cambiar idioma / To switch language: escribe / type "english" o "español".
+
+📘 Facebook: ${FACEBOOK}
+☎️ Teléfono: ${PHONE}
 
 🇵🇷 Bienvenido a DestapesPR (Puerto Rico).
 
@@ -215,11 +228,7 @@ Escribe el número o la palabra del servicio que necesitas:
 3️⃣ - Cámara (inspección con cámara)
 4️⃣ - Calentador (gas o eléctrico)
 5️⃣ - Otro servicio
-6️⃣ - Cita / Appointment
-
-Comandos:
-• "inicio", "menu" o "volver" para regresar a este menú.
-• Para cambiar de idioma, escribe: english o español.`;
+6️⃣ - Cita / Appointment`;
 }
 
 function askDetails(lang, serviceKey) {
@@ -372,7 +381,7 @@ function detectChoice(bodyRaw) {
 
   if (OPTION_KEYS[b]) return OPTION_KEYS[b];
 
-  if (/(destape|tapon|tapada|drenaje|desague|desagüe|fregadero|inodoro|sanitario|bañera|banera|principal)/.test(
+  if (/(destape|tapon|tapada|drenaje|desague|desagüe|fregadero|inodoro|sanitario|bañera|banera|principal|clog)/.test(
     b,
   )) {
     return 'destape';
@@ -382,7 +391,7 @@ function detectChoice(bodyRaw) {
     return 'fuga';
   }
 
-  if (/(camara|cámara|inspeccion|inspección|video)/.test(b)) {
+  if (/(camara|cámara|inspeccion|inspección|video|camera)/.test(b)) {
     return 'camara';
   }
 
