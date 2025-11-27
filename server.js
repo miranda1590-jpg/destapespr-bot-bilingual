@@ -1,6 +1,5 @@
-// DestapesPR Bot 5 Pro 🇵🇷 – BILINGUAL
+// DestapesPR Bot 5 Pro 🇵🇷 – BILINGUAL (ES/EN)
 
-import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
 import sqlite3 from 'sqlite3';
@@ -8,40 +7,72 @@ import { open } from 'sqlite';
 
 const app = express();
 
-// ----- CONFIG BÁSICA -----
-const TAG = 'DestapesPR Bot 5 Pro 🇵🇷';
-const TZ = 'America/Puerto_Rico';
+// -----------------------------------------------------------------------------
+// Configuración básica
+// -----------------------------------------------------------------------------
 const PORT = process.env.PORT || 10000;
+const TAG = 'DestapesPR Bot 5 Pro 🇵🇷';
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000; // 48 horas
-const FACEBOOK_URL = 'https://www.facebook.com/destapesPR/';
-const PHONE_DISPLAY = '787-922-0068';
 
-// Middleware
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(morgan('dev'));
 
-// ----- SQLITE -----
-sqlite3.verbose();
-let db;
+// -----------------------------------------------------------------------------
+// SQLite: sesiones por número
+// -----------------------------------------------------------------------------
+let db = null;
 
 async function getDB() {
   if (db) return db;
+
   db = await open({
     filename: './sessions.db',
     driver: sqlite3.Database,
   });
+
+  // Crear tabla si no existe (estructura correcta)
   await db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
-      from_number   TEXT PRIMARY KEY,
-      lang          TEXT DEFAULT 'es',
-      last_choice   TEXT,
+      from_number TEXT PRIMARY KEY,
+      lang TEXT DEFAULT 'es',
+      last_choice TEXT,
       awaiting_details INTEGER DEFAULT 0,
-      details       TEXT,
-      last_active   INTEGER
+      details TEXT,
+      last_active INTEGER
     );
   `);
-  await db.run('DELETE FROM sessions WHERE last_active < ?', Date.now() - SESSION_TTL_MS);
+
+  // Verificar si existe la columna "lang"
+  const columns = await db.all(`PRAGMA table_info(sessions);`);
+  const hasLang = columns.some((c) => c.name === 'lang');
+
+  // Si la tabla es vieja (sin "lang"), la recreamos limpia
+  if (!hasLang) {
+    console.log("⚠️  Column 'lang' missing — rebuilding sessions table...");
+
+    await db.exec(`DROP TABLE IF EXISTS sessions;`);
+
+    await db.exec(`
+      CREATE TABLE sessions (
+        from_number TEXT PRIMARY KEY,
+        lang TEXT DEFAULT 'es',
+        last_choice TEXT,
+        awaiting_details INTEGER DEFAULT 0,
+        details TEXT,
+        last_active INTEGER
+      );
+    `);
+
+    console.log("✅ sessions table recreated with 'lang' column.");
+  }
+
+  // Limpiar sesiones viejas
+  await db.run(
+    'DELETE FROM sessions WHERE last_active < ?',
+    Date.now() - SESSION_TTL_MS,
+  );
+
   return db;
 }
 
@@ -54,13 +85,12 @@ async function saveSession(from_number, patch) {
   const dbi = await getDB();
   const prev = (await getSession(from_number)) || {};
   const now = Date.now();
+
   const next = {
     lang: patch.lang ?? prev.lang ?? 'es',
     last_choice: patch.last_choice ?? prev.last_choice ?? null,
     awaiting_details:
-      patch.awaiting_details !== undefined
-        ? patch.awaiting_details
-        : prev.awaiting_details ?? 0,
+      patch.awaiting_details ?? prev.awaiting_details ?? 0,
     details: patch.details ?? prev.details ?? null,
     last_active: now,
   };
@@ -89,514 +119,451 @@ async function saveSession(from_number, patch) {
   return next;
 }
 
-async function clearSession(from_number) {
+async function resetSession(from_number) {
   const dbi = await getDB();
   await dbi.run('DELETE FROM sessions WHERE from_number = ?', from_number);
 }
 
-// ----- UTILIDAD: normalizar texto -----
-function normalize(text) {
-  return String(text || '')
+// -----------------------------------------------------------------------------
+// Utilidades de texto / idioma
+// -----------------------------------------------------------------------------
+function normalize(s) {
+  return String(s || '')
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
-    .replace(/\s+/g, ' ')
     .trim();
 }
 
-// Detección MUY simple de idioma
-function detectLang(bodyNorm) {
-  if (!bodyNorm) return 'es';
-  const hasEnglishWords = /\b(hello|hi|good morning|good afternoon|good evening|toilet|sink|clog|drain|appointment|schedule)\b/.test(
-    bodyNorm,
+function detectLanguage(bodyRaw) {
+  const s = normalize(bodyRaw);
+
+  // Comandos explícitos
+  if (s.includes('english')) return 'en';
+  if (s.includes('espanol') || s.includes('español') || s.includes('spanish')) {
+    return 'es';
+  }
+
+  // Heurística simple
+  const hasSpanishWords = /(destape|fuga|fregadero|inodoro|banera|bañera|calentador|cita|servicio)/.test(
+    s,
   );
-  const hasSpanishWords = /\b(hola|buenas|inodoro|fregadero|destape|tapon|tapon|tuberia|cita|servicio)\b/.test(
-    bodyNorm,
+  const hasEnglishWords = /(leak|clog|heater|appointment|service|schedule|bathroom|kitchen)/.test(
+    s,
   );
-  if (hasEnglishWords && !hasSpanishWords) return 'en';
+
   if (hasSpanishWords && !hasEnglishWords) return 'es';
-  return 'es';
+  if (hasEnglishWords && !hasSpanishWords) return 'en';
+
+  return 'es'; // por defecto español
 }
 
-// ----- TEXTOS: MENÚS Y RESPUESTAS -----
+// -----------------------------------------------------------------------------
+// Textos del bot
+// -----------------------------------------------------------------------------
+const PHONE = '787-922-0068';
+const FACEBOOK = 'https://www.facebook.com/destapesPR/';
 
-const COMMANDS_LINE_ES =
-  'Comandos: escribe "inicio", "menu" o "volver" para regresar al menú.\nPara cambiar el idioma, escribe "english" o "español".';
-const COMMANDS_LINE_EN =
-  'Commands: type "start", "menu" or "back" to return to the menu.\nTo switch language, type "english" or "español".';
+const FOOTER_ES = `
+✅ Próximamente nos estaremos comunicando.
+Gracias por su patrocinio.
+— DestapesPR
 
-const FOOTER_ES = `📞 Teléfono directo: ${PHONE_DISPLAY}
-📘 Más info y fotos: ${FACEBOOK_URL}
+☎️ Teléfono directo: ${PHONE}
+📘 Facebook: ${FACEBOOK}
 
-${COMMANDS_LINE_ES}
+🤖 DestapesPR Bot 5 Pro 🇵🇷`;
 
-DestapesPR Bot 5 Pro 🇵🇷`;
-const FOOTER_EN = `📞 Direct phone: ${PHONE_DISPLAY}
-📘 More info & photos: ${FACEBOOK_URL}
+const FOOTER_EN = `
+✅ We will contact you shortly.
+Thank you for your business.
+— DestapesPR
 
-${COMMANDS_LINE_EN}
+☎️ Direct phone: ${PHONE}
+📘 Facebook: ${FACEBOOK}
 
-DestapesPR Bot 5 Pro 🇵🇷`;
+🤖 DestapesPR Bot 5 Pro 🇵🇷`;
 
-// Menú principal según idioma
-function buildMainMenu(lang) {
+function mainMenu(lang) {
   if (lang === 'en') {
-    return [
-      '👋 Welcome to DestapesPR!',
-      '',
-      'Please type the number or word of the service you need:',
-      '',
-      '1️⃣ Clog / Drain cleaning',
-      '2️⃣ Leak (water leaks)',
-      '3️⃣ Camera inspection',
-      '4️⃣ Water heater (gas or electric)',
-      '5️⃣ Other service',
-      '6️⃣ Appointment / Schedule',
-      '',
-      FOOTER_EN,
-    ].join('\n');
+    return `${TAG}
+
+🇵🇷 Welcome to DestapesPR (Puerto Rico).
+
+Please type the number or the word of the service you need:
+
+1️⃣ - Unclog / Drain cleaning
+2️⃣ - Leak / Water leak
+3️⃣ - Camera inspection
+4️⃣ - Water heater (gas or electric)
+5️⃣ - Other service
+6️⃣ - Appointment / Schedule
+
+Commands:
+• "start", "menu" or "back" to return to this menu.
+• To switch language, type: english or español.`;
   }
 
-  // Español por defecto
-  return [
-    '👋 Bienvenido a DestapesPR.',
-    '',
-    'Escribe el número o la palabra del servicio que necesitas:',
-    '',
-    '1️⃣ Destape (drenajes o tuberías tapadas)',
-    '2️⃣ Fuga (fugas de agua)',
-    '3️⃣ Cámara (inspección con cámara)',
-    '4️⃣ Calentador (gas o eléctrico)',
-    '5️⃣ Otro servicio',
-    '6️⃣ Cita / Schedule',
-    '',
-    FOOTER_ES,
-  ].join('\n');
+  return `${TAG}
+
+🇵🇷 Bienvenido a DestapesPR (Puerto Rico).
+
+Escribe el número o la palabra del servicio que necesitas:
+
+1️⃣ - Destape (drenajes o tuberías tapadas)
+2️⃣ - Fuga (fugas de agua)
+3️⃣ - Cámara (inspección con cámara)
+4️⃣ - Calentador (gas o eléctrico)
+5️⃣ - Otro servicio
+6️⃣ - Cita / Appointment
+
+Comandos:
+• "inicio", "menu" o "volver" para regresar a este menú.
+• Para cambiar de idioma, escribe: english o español.`;
 }
 
-function buildServicePrompt(choice, lang) {
-  const isEn = lang === 'en';
+function askDetails(lang, serviceKey) {
+  const es = {
+    destape: `Vamos a coordinar tu servicio de *destape*.
 
-  if (choice === 'destape') {
-    return isEn
-      ? [
-          '🚿 Clog / Drain service selected.',
-          '',
-          'Tell me in one message:',
-          '👤 Full name',
-          '📞 Contact number (787/939 or US)',
-          '📍 Area (city/sector)',
-          '📝 What is clogged? (toilet, sink, main line, etc.)',
-          '',
-          'Example:',
-          `"My name is Ana Rivera, 939-555-9999, clogged toilet in Caguas"`,
-          '',
-          FOOTER_EN,
-        ].join('\n')
-      : [
-          '🚿 Servicio de destape seleccionado.',
-          '',
-          'Envíame en un solo mensaje:',
-          '👤 Nombre completo',
-          '📞 Número de contacto (787/939 o EE.UU.)',
-          '📍 Zona (municipio/sector)',
-          '📝 Qué está tapado (inodoro, fregadero, línea principal, etc.)',
-          '',
-          'Ejemplo:',
-          `"Me llamo Ana Rivera, 939-555-9999, inodoro tapado en Caguas"`,
-          '',
-          FOOTER_ES,
-        ].join('\n');
-  }
+Por favor envía en un solo mensaje:
+👤 Nombre completo
+📞 Número de contacto (787/939 o EE.UU.)
+📍 Municipio o sector
+📝 Breve descripción (ej. "fregadero tapado", "inodoro no baja", "línea principal")`,
+    fuga: `Vamos a coordinar tu servicio de *fuga de agua*.
 
-  if (choice === 'fuga') {
-    return isEn
-      ? [
-          '💧 Leak service selected.',
-          '',
-          'Tell me in one message:',
-          '👤 Full name',
-          '📞 Contact number (787/939 or US)',
-          '📍 Area (city/sector)',
-          '📝 Where do you see the leak or dampness? (bathroom, kitchen, ceiling, exterior, etc.)',
-          '',
-          'Example:',
-          `"My name is Carlos López, 787-555-0000, leak in bathroom ceiling in Bayamón"`,
-          '',
-          FOOTER_EN,
-        ].join('\n')
-      : [
-          '💧 Servicio de fuga seleccionado.',
-          '',
-          'Envíame en un solo mensaje:',
-          '👤 Nombre completo',
-          '📞 Número de contacto (787/939 o EE.UU.)',
-          '📍 Zona (municipio/sector)',
-          '📝 Dónde ves la fuga o humedad (baño, cocina, techo, exterior, etc.)',
-          '',
-          'Ejemplo:',
-          `"Me llamo Carlos López, 787-555-0000, fuga en techo de baño en Bayamón"`,
-          '',
-          FOOTER_ES,
-        ].join('\n');
-  }
+Por favor envía en un solo mensaje:
+👤 Nombre completo
+📞 Número de contacto (787/939 o EE.UU.)
+📍 Municipio o sector
+📝 Dónde ves la fuga o humedad (ej. pared, techo, patio, baño)`,
+    camara: `Vamos a coordinar tu servicio de *inspección con cámara*.
 
-  if (choice === 'camara') {
-    return isEn
-      ? [
-          '📹 Camera inspection service selected.',
-          '',
-          'Tell me in one message:',
-          '👤 Full name',
-          '📞 Contact number (787/939 or US)',
-          '📍 Area (city/sector)',
-          '📝 Where do you need the inspection? (bathroom, kitchen, main line, etc.)',
-          '',
-          'Example:',
-          `"My name is Luis Pérez, 939-555-1111, camera inspection in main line of house in Ponce"`,
-          '',
-          FOOTER_EN,
-        ].join('\n')
-      : [
-          '📹 Servicio de inspección con cámara seleccionado.',
-          '',
-          'Envíame en un solo mensaje:',
-          '👤 Nombre completo',
-          '📞 Número de contacto (787/939 o EE.UU.)',
-          '📍 Zona (municipio/sector)',
-          '📝 Dónde necesitas la inspección (baño, cocina, línea principal, etc.)',
-          '',
-          'Ejemplo:',
-          `"Me llamo Luis Pérez, 939-555-1111, inspección con cámara en línea principal de la casa en Ponce"`,
-          '',
-          FOOTER_ES,
-        ].join('\n');
-  }
+Por favor envía en un solo mensaje:
+👤 Nombre completo
+📞 Número de contacto (787/939 o EE.UU.)
+📍 Municipio o sector
+📝 Dónde necesitas la cámara (baño, cocina, línea principal, etc.)`,
+    calentador: `Vamos a coordinar tu servicio de *calentador*.
 
-  if (choice === 'calentador') {
-    return isEn
-      ? [
-          '🔥 Water heater service selected.',
-          '',
-          'Tell me in one message:',
-          '👤 Full name',
-          '📞 Contact number (787/939 or US)',
-          '📍 Area (city/sector)',
-          '📝 Type of heater (gas or electric) and what is happening (no hot water, leaks, etc.)',
-          '',
-          'Example:',
-          `"My name is José Torres, 787-555-2222, electric heater, no hot water, in Cayey"`,
-          '',
-          FOOTER_EN,
-        ].join('\n')
-      : [
-          '🔥 Servicio de calentador seleccionado.',
-          '',
-          'Envíame en un solo mensaje:',
-          '👤 Nombre completo',
-          '📞 Número de contacto (787/939 o EE.UU.)',
-          '📍 Zona (municipio/sector)',
-          '📝 Tipo de calentador (gas o eléctrico) y qué está pasando (no calienta, fuga, etc.)',
-          '',
-          'Ejemplo:',
-          `"Me llamo José Torres, 787-555-2222, calentador eléctrico, no calienta, en Cayey"`,
-          '',
-          FOOTER_ES,
-        ].join('\n');
-  }
+Por favor envía en un solo mensaje:
+👤 Nombre completo
+📞 Número de contacto (787/939 o EE.UU.)
+📍 Municipio o sector
+📝 Tipo de calentador (gas o eléctrico) y problema que notas`,
+    otro: `Vamos a coordinar tu servicio.
 
-  if (choice === 'otro') {
-    return isEn
-      ? [
-          '🛠 Other plumbing service selected.',
-          '',
-          'Tell me in one message:',
-          '👤 Full name',
-          '📞 Contact number (787/939 or US)',
-          '📍 Area (city/sector)',
-          '📝 Brief description of the service you need',
-          '',
-          'Example:',
-          `"My name is Marta Díaz, 939-555-3333, need quote for new bathroom installation in Cidra"`,
-          '',
-          FOOTER_EN,
-        ].join('\n')
-      : [
-          '🛠 Otro servicio seleccionado.',
-          '',
-          'Envíame en un solo mensaje:',
-          '👤 Nombre completo',
-          '📞 Número de contacto (787/939 o EE.UU.)',
-          '📍 Zona (municipio/sector)',
-          '📝 Descripción breve del servicio que necesitas',
-          '',
-          'Ejemplo:',
-          `"Me llamo Marta Díaz, 939-555-3333, necesito cotización para instalación de baño nuevo en Cidra"`,
-          '',
-          FOOTER_ES,
-        ].join('\n');
-  }
+Por favor envía en un solo mensaje:
+👤 Nombre completo
+📞 Número de contacto (787/939 o EE.UU.)
+📍 Municipio o sector
+📝 Breve descripción del servicio que necesitas`,
+    cita: `Vamos a coordinar tu cita.
 
-  if (choice === 'cita') {
-    return isEn
-      ? [
-          '📅 Appointment / Schedule selected.',
-          '',
-          'Tell me in one message:',
-          '👤 Full name',
-          '📞 Contact number (787/939 or US)',
-          '📍 Area (city/sector)',
-          '📝 Service you need (clog, leak, camera, heater, other)',
-          '',
-          'Example:',
-          `"My name is Ana Rivera, 939-555-9999, clog in kitchen sink in Caguas"`,
-          '',
-          FOOTER_EN,
-        ].join('\n')
-      : [
-          '📅 Opción de cita seleccionada.',
-          '',
-          'Envíame en un solo mensaje:',
-          '👤 Nombre completo',
-          '📞 Número de contacto (787/939 o EE.UU.)',
-          '📍 Zona (municipio/sector)',
-          '📝 Servicio que necesitas (destape, fuga, cámara, calentador, otro)',
-          '',
-          'Ejemplo:',
-          `"Me llamo Ana Rivera, 939-555-9999, destape de fregadero de cocina en Caguas"`,
-          '',
-          FOOTER_ES,
-        ].join('\n');
-  }
+Por favor envía en un solo mensaje:
+👤 Nombre completo
+📞 Número de contacto (787/939 o EE.UU.)
+📍 Municipio o sector
+📝 Servicio que necesitas`,
+  };
 
-  return buildMainMenu(lang);
+  const en = {
+    destape: `Let's coordinate your *drain unclog* service.
+
+Please send in a single message:
+👤 Full name
+📞 Contact number (787/939 or U.S.)
+📍 City / area
+📝 Short description (e.g. "kitchen sink clogged", "toilet not flushing", "main line")`,
+    fuga: `Let's coordinate your *water leak* service.
+
+Please send in a single message:
+👤 Full name
+📞 Contact number (787/939 or U.S.)
+📍 City / area
+📝 Where you see the leak or moisture (wall, ceiling, yard, bathroom, etc.)`,
+    camara: `Let's coordinate your *camera inspection*.
+
+Please send in a single message:
+👤 Full name
+📞 Contact number (787/939 or U.S.)
+📍 City / area
+📝 Where you need the camera (bathroom, kitchen, main line, etc.)`,
+    calentador: `Let's coordinate your *water heater* service.
+
+Please send in a single message:
+👤 Full name
+📞 Contact number (787/939 or U.S.)
+📍 City / area
+📝 Type of heater (gas or electric) and the issue you notice`,
+    otro: `Let's coordinate your service.
+
+Please send in a single message:
+👤 Full name
+📞 Contact number (787/939 or U.S.)
+📍 City / area
+📝 Short description of the service you need`,
+    cita: `Let's schedule your appointment.
+
+Please send in a single message:
+👤 Full name
+📞 Contact number (787/939 or U.S.)
+📍 City / area
+📝 Service you need`,
+  };
+
+  const block = lang === 'en' ? en : es;
+
+  return `${block[serviceKey]}
+
+Ejemplo / Example:
+"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero tapado"
+
+(Escribe "menu" o "volver" / type "menu" or "back" to return to the menu.)`;
 }
 
-function buildConfirmMessage(lang, choice, detailsText) {
-  const isEn = lang === 'en';
-  const choiceLabel =
-    choice === 'destape'
-      ? isEn
-        ? 'clog / drain'
-        : 'destape'
-      : choice === 'fuga'
-      ? isEn
-        ? 'leak'
-        : 'fuga'
-      : choice === 'camara'
-      ? isEn
-        ? 'camera inspection'
-        : 'inspección con cámara'
-      : choice === 'calentador'
-      ? isEn
-        ? 'water heater'
-        : 'calentador'
-      : choice === 'otro'
-      ? isEn
-        ? 'other service'
-        : 'otro servicio'
-      : choice === 'cita'
-      ? isEn
-        ? 'appointment'
-        : 'cita'
-      : '';
+function confirmDetails(lang, serviceKey, bodyRaw) {
+  const serviceLabelES = {
+    destape: 'destape',
+    fuga: 'fuga de agua',
+    camara: 'inspección con cámara',
+    calentador: 'calentador',
+    otro: 'otro servicio',
+    cita: 'cita',
+  };
 
-  const header = isEn ? '✅ Received. I saved your details:' : '✅ Recibido. Guardé tus datos:';
-  const serviceLine = choiceLabel
-    ? isEn
-      ? `Service: ${choiceLabel}`
-      : `Servicio: ${choiceLabel}`
-    : '';
+  const serviceLabelEN = {
+    destape: 'unclog service',
+    fuga: 'water leak service',
+    camara: 'camera inspection',
+    calentador: 'water heater service',
+    otro: 'other service',
+    cita: 'appointment',
+  };
 
-  const thanksLines = isEn
-    ? [
-        '',
-        '✅ We will contact you shortly.',
-        'Thank you for your business.',
-        '— DestapesPR',
-      ]
-    : [
-        '',
-        '✅ Próximamente nos estaremos comunicando.',
-        'Gracias por su patrocinio.',
-        '— DestapesPR',
-      ];
+  if (lang === 'en') {
+    return `✅ Received. I saved your details for *${serviceLabelEN[serviceKey] || 'service'}*:
+"${bodyRaw}"
 
-  const commandsAndFooter = isEn ? FOOTER_EN : FOOTER_ES;
+We will review your information and contact you soon.${FOOTER_EN}`;
+  }
 
-  return [
-    header,
-    `"${detailsText}"`,
-    serviceLine ? '\n' + serviceLine : '',
-    ...thanksLines,
-    '',
-    commandsAndFooter,
-  ]
-    .filter(Boolean)
-    .join('\n');
+  return `✅ Recibido. Guardé tus datos para *${serviceLabelES[serviceKey] || 'servicio'}*:
+"${bodyRaw}"
+
+Estaremos revisando tu información y nos comunicaremos contigo en breve.${FOOTER_ES}`;
 }
 
-// ----- MATCHING OPCIONES -----
-function detectChoice(bodyNorm) {
-  if (!bodyNorm) return null;
-  if (['1', '1️⃣', 'uno'].includes(bodyNorm)) return 'destape';
-  if (['2', '2️⃣', 'dos'].includes(bodyNorm)) return 'fuga';
-  if (['3', '3️⃣', 'tres'].includes(bodyNorm)) return 'camara';
-  if (['4', '4️⃣', 'cuatro'].includes(bodyNorm)) return 'calentador';
-  if (['5', '5️⃣', 'cinco'].includes(bodyNorm)) return 'otro';
-  if (['6', '6️⃣', 'seis', 'cita', 'schedule', 'appointment'].includes(bodyNorm)) return 'cita';
+// -----------------------------------------------------------------------------
+// Matching de opciones
+// -----------------------------------------------------------------------------
+const OPTION_KEYS = {
+  '1': 'destape',
+  '2': 'fuga',
+  '3': 'camara',
+  '4': 'calentador',
+  '5': 'otro',
+  '6': 'cita',
+};
 
-  if (bodyNorm.includes('destape') || bodyNorm.includes('tap')) return 'destape';
-  if (bodyNorm.includes('fuga') || bodyNorm.includes('leak')) return 'fuga';
-  if (bodyNorm.includes('camara') || bodyNorm.includes('camera')) return 'camara';
-  if (bodyNorm.includes('calentador') || bodyNorm.includes('heater')) return 'calentador';
-  if (bodyNorm.includes('cita') || bodyNorm.includes('schedule') || bodyNorm.includes('appointment'))
+function detectChoice(bodyRaw) {
+  const b = normalize(bodyRaw);
+
+  if (OPTION_KEYS[b]) return OPTION_KEYS[b];
+
+  if (/(destape|tapon|tapada|drenaje|desague|desagüe|fregadero|inodoro|sanitario|bañera|banera|principal)/.test(
+    b,
+  )) {
+    return 'destape';
+  }
+
+  if (/(fuga|goteo|salidero|humedad|filtracion|filtración|leak)/.test(b)) {
+    return 'fuga';
+  }
+
+  if (/(camara|cámara|inspeccion|inspección|video)/.test(b)) {
+    return 'camara';
+  }
+
+  if (/(calentador|heater|boiler|agua caliente)/.test(b)) {
+    return 'calentador';
+  }
+
+  if (/(cita|appointment|schedule)/.test(b)) {
     return 'cita';
+  }
 
-  if (bodyNorm.includes('otro') || bodyNorm.includes('other')) return 'otro';
+  if (/(otro|otros|other|service)/.test(b)) {
+    return 'otro';
+  }
 
   return null;
 }
 
-// ----- RESPUESTA TWILIO XML -----
+// -----------------------------------------------------------------------------
+// Twilio helper
+// -----------------------------------------------------------------------------
 function sendTwilioXML(res, text) {
-  const safe = String(text || '')
+  const safe = String(text)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+
   const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${safe}</Message></Response>`;
   res.set('Content-Type', 'application/xml; charset=utf-8');
   return res.status(200).send(xml);
 }
 
-// ----- ENDPOINTS DE DIAGNÓSTICO -----
+// -----------------------------------------------------------------------------
+// Rutas de diagnóstico
+// -----------------------------------------------------------------------------
 app.get('/__version', (_req, res) => {
-  res.json({ ok: true, tag: TAG, tz: TZ });
+  res.json({
+    ok: true,
+    tag: TAG,
+    tz: 'America/Puerto_Rico',
+  });
 });
 
-app.get('/health', async (_req, res) => {
-  try {
-    await getDB();
-    res.json({ ok: true, tag: TAG, tz: TZ });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok: false, error: 'db_error' });
-  }
+app.get('/', (_req, res) => {
+  res.send(`${TAG} – online ✅`);
 });
 
-// ----- WEBHOOK WHATSAPP (TWILIO) -----
+// -----------------------------------------------------------------------------
+// Webhook principal de WhatsApp
+// -----------------------------------------------------------------------------
 app.post('/webhook/whatsapp', async (req, res) => {
   try {
     await getDB();
 
     const from =
-      (req.body.From || req.body.from || req.body.WaId || '').toString().trim() || 'unknown';
-    const bodyRaw = (req.body.Body || req.body.body || '').toString();
-    const bodyNorm = normalize(bodyRaw);
+      req.body.From ||
+      req.body.from ||
+      req.body.WaId ||
+      req.body.waId ||
+      '';
+    const bodyRaw =
+      req.body.Body ||
+      req.body.body ||
+      '';
 
-    let session = (await getSession(from)) || { lang: 'es' };
+    const fromStr = String(from);
+    const bodyStr = String(bodyRaw);
+    const bodyNorm = normalize(bodyStr);
+
+    let session = (await getSession(fromStr)) || {
+      from_number: fromStr,
+      lang: 'es',
+      last_choice: null,
+      awaiting_details: 0,
+      details: null,
+    };
+
+    // 1) Cambios de idioma explícitos
     let lang = session.lang || 'es';
+    const langDetectedCmd = detectLanguage(bodyStr);
 
-    // Cambio de idioma directo
-    if (bodyNorm === 'english') {
+    if (bodyNorm.includes('english')) {
       lang = 'en';
-      session = await saveSession(from, { lang, awaiting_details: 0, last_choice: null });
-      const msg = [
-        '🌐 Language changed to English.',
-        '',
-        buildMainMenu(lang),
-      ].join('\n');
-      return sendTwilioXML(res, msg);
-    }
-    if (bodyNorm === 'espanol' || bodyNorm === 'español' || bodyNorm === 'spanish') {
+    } else if (bodyNorm.includes('espanol') || bodyNorm.includes('español') || bodyNorm.includes('spanish')) {
       lang = 'es';
-      session = await saveSession(from, { lang, awaiting_details: 0, last_choice: null });
-      const msg = [
-        '🌐 Idioma cambiado a español.',
-        '',
-        buildMainMenu(lang),
-      ].join('\n');
+    } else if (!session.lang) {
+      lang = langDetectedCmd || 'es';
+    }
+
+    session = await saveSession(fromStr, { lang });
+
+    // 2) Comandos de menú (en ambos idiomas)
+    const isMenuCmd = [
+      'menu',
+      'inicio',
+      'volver',
+      'start',
+      'back',
+      'menú',
+    ].includes(bodyNorm);
+
+    if (!bodyNorm || isMenuCmd) {
+      await saveSession(fromStr, {
+        last_choice: null,
+        awaiting_details: 0,
+        details: null,
+      });
+      return sendTwilioXML(res, mainMenu(lang));
+    }
+
+    // 3) Si el usuario solo escribió "english" o "español"
+    if (
+      bodyNorm === 'english' ||
+      bodyNorm === 'espanol' ||
+      bodyNorm === 'español' ||
+      bodyNorm === 'spanish'
+    ) {
+      const newLang =
+        bodyNorm === 'english' ? 'en' : 'es';
+
+      session = await saveSession(fromStr, { lang: newLang });
+
+      const msg =
+        newLang === 'en'
+          ? `✅ Language changed to *English*.
+
+${mainMenu('en')}`
+          : `✅ Idioma cambiado a *español*.
+
+${mainMenu('es')}`;
+
       return sendTwilioXML(res, msg);
     }
 
-    // Comandos de menú
-    if (
-      ['inicio', 'menu', 'volver'].includes(bodyNorm) ||
-      ['start', 'menu', 'back'].includes(bodyNorm)
-    ) {
-      const autoLang = detectLang(bodyNorm);
-      lang = autoLang || lang || 'es';
-      await saveSession(from, { lang, awaiting_details: 0, last_choice: null, details: null });
-      const menuText = buildMainMenu(lang);
-      return sendTwilioXML(res, menuText);
-    }
-
-    // Si está esperando detalles
+    // 4) Si estamos esperando detalles de un servicio
     if (session.last_choice && session.awaiting_details) {
-      const confirmMsg = buildConfirmMessage(lang, session.last_choice, bodyRaw);
-      await saveSession(from, {
-        details: bodyRaw,
+      await saveSession(fromStr, {
+        details: bodyStr,
         awaiting_details: 0,
       });
-      return sendTwilioXML(res, confirmMsg);
+
+      const reply = confirmDetails(lang, session.last_choice, bodyStr);
+      return sendTwilioXML(res, reply);
     }
 
-    // Intentar detectar elección de servicio
-    const choice = detectChoice(bodyNorm);
-    if (choice) {
-      // Ajustar idioma según contenido si no está claro
-      const autoLang = detectLang(bodyNorm);
-      lang = autoLang || lang || 'es';
+    // 5) Detectar elección de servicio
+    const choice = detectChoice(bodyStr);
 
-      await saveSession(from, {
-        lang,
+    if (choice) {
+      await saveSession(fromStr, {
         last_choice: choice,
         awaiting_details: 1,
         details: null,
       });
 
-      const prompt = buildServicePrompt(choice, lang);
-      return sendTwilioXML(res, prompt);
+      const reply = askDetails(lang, choice);
+      return sendTwilioXML(res, reply);
     }
 
-    // Nada coincidió: mandar menú + explicación
-    const autoLang = detectLang(bodyNorm);
-    lang = autoLang || lang || 'es';
+    // 6) Fallback: reenviar menú
+    const fallback =
+      lang === 'en'
+        ? `I didn't understand your message.
 
-    const unknownEs = [
-      'No entendí tu mensaje. Vamos a empezar desde el menú 👇',
-      '',
-      buildMainMenu('es'),
-    ].join('\n');
-    const unknownEn = [
-      "I didn't understand your message. Let's start from the menu 👇",
-      '',
-      buildMainMenu('en'),
-    ].join('\n');
+Please choose an option from the menu or type "menu" to see it again.`
+        : `No entendí tu mensaje.
 
-    const reply = lang === 'en' ? unknownEn : unknownEs;
-    await saveSession(from, {
-      lang,
-      last_choice: null,
-      awaiting_details: 0,
-      details: null,
-    });
+Por favor escoge una opción del menú o escribe "menu" para verlo nuevamente.`;
 
-    return sendTwilioXML(res, reply);
+    return sendTwilioXML(res, `${fallback}\n\n${mainMenu(lang)}`);
   } catch (err) {
     console.error('Error in /webhook/whatsapp', err);
     const fallback =
-      'Lo siento, hubo un error interno. Intenta de nuevo en unos minutos.\nSorry, there was an internal error. Please try again in a few minutes.';
+      'Ocurrió un error temporal. Intenta de nuevo en unos momentos.';
     return sendTwilioXML(res, fallback);
   }
 });
 
-// ----- ROOT -----
-app.get('/', (_req, res) => {
-  res.send(`${TAG} activo en ${TZ}`);
-});
-
-// ----- START -----
+// -----------------------------------------------------------------------------
+// Start
+// -----------------------------------------------------------------------------
 app.listen(PORT, () => {
-  console.log(`💬 ${TAG} listening on http://localhost:${PORT}`);
+  console.log(`${TAG} listening on http://localhost:${PORT}`);
 });
