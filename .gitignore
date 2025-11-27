@@ -20,3 +20,5 @@ sessions.db
 .env
 patches/
 .env
+
+.env
