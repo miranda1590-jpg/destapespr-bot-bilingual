@@ -184,50 +184,27 @@ Thank you for your business.
 
 🤖 DestapesPR Bot 5 Pro 🇵🇷`;
 
-// 🔹 MENÚ PRINCIPAL – AHORA PRIMERO COMANDOS + FB (BILINGÜE)
-function mainMenu(lang) {
-  if (lang === 'en') {
-    return `${TAG}
-
-🔁 Commands / Comandos:
-• "start", "menu" or "back" → main menu
-• "inicio", "menu" o "volver" → menú principal
-• To switch language / Cambiar idioma: type / escribe "english" o "español".
-
-📘 Facebook: ${FACEBOOK}
-☎️ Phone / Teléfono: ${PHONE}
-
-🇵🇷 Welcome to DestapesPR (Puerto Rico).
-
-Please type the number or the word of the service you need:
-
-1️⃣ - Unclog / Drain cleaning
-2️⃣ - Leak / Water leak
-3️⃣ - Camera inspection
-4️⃣ - Water heater (gas or electric)
-5️⃣ - Other service
-6️⃣ - Appointment / Schedule`;
-  }
-
+// 🔹 MENÚ PRINCIPAL – SIEMPRE BILINGÜE
+function mainMenu() {
   return `${TAG}
+
+🇵🇷 DestapesPR – Puerto Rico
 
 🔁 Comandos / Commands:
 • "inicio", "menu" o "volver" → menú principal
 • "start", "menu" or "back" → main menu
-• Cambiar idioma / To switch language: escribe / type "english" o "español".
+• Cambiar idioma / Switch language: escribe / type "english" o "español".
 
 📘 Facebook: ${FACEBOOK}
-☎️ Teléfono: ${PHONE}
+☎️ Teléfono / Phone: ${PHONE}
 
-🇵🇷 Bienvenido a DestapesPR (Puerto Rico).
+📋 Selecciona un servicio / Choose a service:
 
-Escribe el número o la palabra del servicio que necesitas:
-
-1️⃣ - Destape (drenajes o tuberías tapadas)
-2️⃣ - Fuga (fugas de agua)
-3️⃣ - Cámara (inspección con cámara)
-4️⃣ - Calentador (gas o eléctrico)
-5️⃣ - Otro servicio
+1️⃣ - Destape (drenajes o tuberías tapadas) / Unclog & drain cleaning
+2️⃣ - Fuga de agua / Water leak
+3️⃣ - Cámara (inspección con cámara) / Camera inspection
+4️⃣ - Calentador (gas o eléctrico) / Water heater (gas or electric)
+5️⃣ - Otro servicio / Other service
 6️⃣ - Cita / Appointment`;
 }
 
@@ -469,7 +446,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       details: null,
     };
 
-    // 1) Cambios de idioma explícitos
+    // 1) Cambios de idioma explícitos / detección
     let lang = session.lang || 'es';
     const langDetectedCmd = detectLanguage(bodyStr);
 
@@ -499,7 +476,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
         awaiting_details: 0,
         details: null,
       });
-      return sendTwilioXML(res, mainMenu(lang));
+      return sendTwilioXML(res, mainMenu());
     }
 
     // 3) Si el usuario solo escribió "english" o "español"
@@ -516,12 +493,8 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
       const msg =
         newLang === 'en'
-          ? `✅ Language changed to *English*.
-
-${mainMenu('en')}`
-          : `✅ Idioma cambiado a *español*.
-
-${mainMenu('es')}`;
+          ? `✅ Language changed to *English*.\n\n${mainMenu()}`
+          : `✅ Idioma cambiado a *español*.\n\n${mainMenu()}`;
 
       return sendTwilioXML(res, msg);
     }
@@ -561,7 +534,7 @@ Please choose an option from the menu or type "menu" to see it again.`
 
 Por favor escoge una opción del menú o escribe "menu" para verlo nuevamente.`;
 
-    return sendTwilioXML(res, `${fallback}\n\n${mainMenu(lang)}`);
+    return sendTwilioXML(res, `${fallback}\n\n${mainMenu()}`);
   } catch (err) {
     console.error('Error in /webhook/whatsapp', err);
     const fallback =
