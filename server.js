@@ -18,7 +18,7 @@ function normalizeText(s) {
     .replace(/\p{Diacritic}/gu, "");
 }
 
-// heurística simple para detectar idioma
+// Heurística simple para detectar idioma
 function detectLangFromText(bodyNorm) {
   const esWords = [
     "hola",
@@ -37,7 +37,6 @@ function detectLangFromText(bodyNorm) {
     "calentador",
     "tuberia",
     "tubería",
-    "tuberia",
     "cita",
     "servicio",
     "municipio",
@@ -511,7 +510,6 @@ app.post("/webhook/whatsapp", async (req, res) => {
       details: null,
     };
 
-    // comandos de menú
     const isMenuCmd = [
       "menu",
       "inicio",
@@ -522,10 +520,10 @@ app.post("/webhook/whatsapp", async (req, res) => {
       "",
     ].includes(bodyNorm);
 
-    // siempre intentamos deducir idioma del texto
     const langFromText = detectLangFromText(bodyNorm);
     const lang = langFromText || session.lang || "es";
 
+    // 1) Comandos de menú: siempre resetean e imprimen menú
     if (isMenuCmd) {
       session = await saveSession(from, {
         lang,
@@ -537,7 +535,23 @@ app.post("/webhook/whatsapp", async (req, res) => {
       return sendTwilioXML(res, menuText);
     }
 
-    // ¿Viene un servicio nuevo?
+    // 2) SI YA HAY SERVICIO SELECCIONADO Y ESPERAMOS DETALLES,
+    //    SIEMPRE TRATAR ESTE MENSAJE COMO DETALLES (AUNQUE CONTENGA "toilet", "leak", etc)
+    if (session.last_choice && session.awaiting_details) {
+      await saveSession(from, {
+        lang,
+        details: bodyRaw,
+        awaiting_details: 0,
+      });
+      const txt = buildDetailsConfirmationText(
+        lang,
+        session.last_choice,
+        bodyRaw
+      );
+      return sendTwilioXML(res, txt);
+    }
+
+    // 3) Detectar nuevo servicio (solo si NO estamos esperando detalles)
     const serviceChoice = detectServiceChoice(bodyNorm);
 
     if (serviceChoice) {
@@ -562,22 +576,7 @@ app.post("/webhook/whatsapp", async (req, res) => {
       }
     }
 
-    // Si ya hay un servicio seleccionado y estamos esperando detalles
-    if (session.last_choice && session.awaiting_details) {
-      await saveSession(from, {
-        lang,
-        details: bodyRaw,
-        awaiting_details: 0,
-      });
-      const txt = buildDetailsConfirmationText(
-        lang,
-        session.last_choice,
-        bodyRaw
-      );
-      return sendTwilioXML(res, txt);
-    }
-
-    // fallback: mandar menú
+    // 4) Fallback: menú principal
     const fallback = buildMainMenuText();
     return sendTwilioXML(res, fallback);
   } catch (e) {
