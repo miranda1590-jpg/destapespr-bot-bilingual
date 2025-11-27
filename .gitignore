@@ -28,3 +28,6 @@ patches/
 
 .env
 sessions.db
+
+.env
+sessions.db
