@@ -17,3 +17,5 @@ patches/
 logs
 node_modules
 sessions.db
+.env
+patches/
