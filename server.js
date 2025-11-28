@@ -1,4 +1,5 @@
-// server.js
+// server.js - DestapesPR Bot 5 Pro (bilingüe ES/EN)
+
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -13,360 +14,514 @@ app.use(morgan('dev'));
 const PORT = process.env.PORT || 10000;
 const TAG = 'DestapesPR Bot 5 Pro 🇵🇷';
 
-// ===== DB SETUP =====
+// =========================
+// SQLite: sesiones
+// =========================
 let db;
+const SESSION_TTL_MS = 48 * 60 * 60 * 1000; // 48 horas
 
 async function initDB() {
   if (db) return db;
+
   db = await open({
     filename: './sessions.db',
-    driver: sqlite3.Database
+    driver: sqlite3.Database,
   });
 
+  // Crear tabla si no existe
   await db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       from_number TEXT PRIMARY KEY,
-      lang TEXT,
-      last_service TEXT,
+      lang TEXT DEFAULT 'es',
+      last_choice TEXT,
       awaiting_details INTEGER DEFAULT 0,
-      last_details TEXT,
+      details TEXT,
       last_active INTEGER
     );
   `);
 
-  // Migración defensiva por si viene de versiones viejas
+  // Migración: añadir columna lang si la tabla es vieja
   const cols = await db.all(`PRAGMA table_info(sessions);`);
-  const names = cols.map(c => c.name);
-  const migrations = [];
-  if (!names.includes('lang')) migrations.push(`ALTER TABLE sessions ADD COLUMN lang TEXT;`);
-  if (!names.includes('last_service')) migrations.push(`ALTER TABLE sessions ADD COLUMN last_service TEXT;`);
-  if (!names.includes('awaiting_details')) migrations.push(`ALTER TABLE sessions ADD COLUMN awaiting_details INTEGER DEFAULT 0;`);
-  if (!names.includes('last_details')) migrations.push(`ALTER TABLE sessions ADD COLUMN last_details TEXT;`);
-  for (const m of migrations) {
-    await db.exec(m);
+  const hasLang = cols.some((c) => c.name === 'lang');
+  if (!hasLang) {
+    await db.exec(`ALTER TABLE sessions ADD COLUMN lang TEXT DEFAULT 'es';`);
   }
+
+  // Limpiar sesiones viejas
+  await db.run(
+    'DELETE FROM sessions WHERE last_active < ?',
+    Date.now() - SESSION_TTL_MS
+  );
 
   return db;
 }
 
 async function getSession(from) {
-  await initDB();
   return db.get('SELECT * FROM sessions WHERE from_number = ?', from);
 }
 
 async function saveSession(from, patch = {}) {
-  await initDB();
   const prev = (await getSession(from)) || {};
   const now = Date.now();
+
   const next = {
     lang: patch.lang ?? prev.lang ?? 'es',
-    last_service: patch.last_service ?? prev.last_service ?? null,
-    awaiting_details: patch.awaiting_details ?? prev.awaiting_details ?? 0,
-    last_details: patch.last_details ?? prev.last_details ?? null,
-    last_active: now
+    last_choice: patch.last_choice ?? prev.last_choice ?? null,
+    awaiting_details:
+      patch.awaiting_details ?? prev.awaiting_details ?? 0,
+    details: patch.details ?? prev.details ?? null,
+    last_active: now,
   };
 
   await db.run(
     `
-    INSERT INTO sessions (from_number, lang, last_service, awaiting_details, last_details, last_active)
+    INSERT INTO sessions (from_number, lang, last_choice, awaiting_details, details, last_active)
     VALUES (?, ?, ?, ?, ?, ?)
     ON CONFLICT(from_number) DO UPDATE SET
       lang = excluded.lang,
-      last_service = excluded.last_service,
+      last_choice = excluded.last_choice,
       awaiting_details = excluded.awaiting_details,
-      last_details = excluded.last_details,
+      details = excluded.details,
       last_active = excluded.last_active
   `,
-    [from, next.lang, next.last_service, next.awaiting_details, next.last_details, next.last_active]
+    [
+      from,
+      next.lang,
+      next.last_choice,
+      next.awaiting_details,
+      next.details,
+      next.last_active,
+    ]
   );
 
   return next;
 }
 
 async function clearSession(from) {
-  await initDB();
   await db.run('DELETE FROM sessions WHERE from_number = ?', from);
 }
 
-// ===== HELPERS =====
-function norm(text) {
-  return String(text || '')
+// =========================
+// Utilidades de texto
+// =========================
+function norm(str) {
+  return String(str || '')
+    .trim()
     .toLowerCase()
     .normalize('NFD')
-    .replace(/\p{Diacritic}/gu, '')
-    .trim();
+    .replace(/\p{Diacritic}/gu, '');
 }
 
-// Detección simple ES / EN
-function detectLang(bodyRaw, prevLang = 'es') {
-  const t = norm(bodyRaw);
+// Palabras clave para detección de idioma
+const EN_HINTS = [
+  'drain',
+  'unclog',
+  'clogged',
+  'leak',
+  'camera',
+  'inspection',
+  'heater',
+  'appointment',
+  'schedule',
+  'water',
+  'toilet',
+  'sink',
+];
+const ES_HINTS = [
+  'destape',
+  'tapon',
+  'tapada',
+  'fuga',
+  'goteo',
+  'camara',
+  'camara',
+  'cita',
+  'calentador',
+  'inodoro',
+  'fregadero',
+  'banera',
+  'bañera',
+];
 
-  if (/^(english|ingles|inglés)\b/.test(t)) return 'en';
-  if (/^(espanol|español|spanish)\b/.test(t)) return 'es';
+function detectLanguage(bodyRaw, previousLang = 'es') {
+  const txt = norm(bodyRaw);
 
-  if (/\b(drain|clog|leak|camera|heater|water|sink|kitchen|bathroom|appointment)\b/i.test(bodyRaw)) {
+  // Cambio explícito de idioma
+  if (/\benglish\b/.test(txt) || /\bingles\b/.test(txt) || /\bingl[eé]s\b/.test(txt)) {
     return 'en';
   }
-
-  if (/[áéíóúñ]/i.test(bodyRaw) || /\b(fregadero|inodoro|bañera|ducha|fuga|calentador|destape)\b/i.test(bodyRaw)) {
+  if (/\bespanol\b/.test(txt) || /\bespa[ñn]ol\b/.test(txt) || /\bspanish\b/.test(txt)) {
     return 'es';
   }
 
-  return prevLang || 'es';
+  let enScore = 0;
+  let esScore = 0;
+  for (const w of EN_HINTS) {
+    if (txt.includes(w)) enScore++;
+  }
+  for (const w of ES_HINTS) {
+    if (txt.includes(w)) esScore++;
+  }
+
+  if (enScore > esScore && enScore > 0) return 'en';
+  if (esScore > enScore && esScore > 0) return 'es';
+
+  return previousLang || 'es';
 }
 
-// ===== CLASIFICACIÓN DE SERVICIO =====
-const SERVICE_KEYS = {
-  destape: {
-    numbers: ['1'],
-    keywords: [
-      'destape',
-      'tapon',
-      'tapado',
-      'tapada',
-      'clog',
-      'clogged',
-      'drain',
-      'drains',
-      'drain cleaning',
-      'drenaje',
-      'drenajes',
-      'desague',
-      'desagüe',
-      'tuberia tapada',
-      'tuberia',
-      'tuberias',
-      'linea principal',
-      'línea principal',
-      'main line',
-      'toilet',
-      'inodoro',
-      'wc',
-      'fregadero',
-      'sink',
-      'lavamanos',
-      'lavabo',
-      'bañera',
-      'banera',
-      'ducha',
-      'shower',
-      'kitchen line',
-      'kitchen sink',
-      'bathroom line'
-    ]
-  },
-  fuga: {
-    numbers: ['2'],
-    keywords: [
-      'fuga',
-      'fugas',
-      'goteo',
-      'goteando',
-      'salidero',
-      'filtracion',
-      'filtración',
-      'humedad',
-      'leak',
-      'leaks',
-      'water leak',
-      'pipe leak',
-      'gotea'
-    ]
-  },
-  camara: {
-    numbers: ['3'],
-    keywords: [
-      'camara',
-      'cámara',
-      'camera',
-      'camera inspection',
-      'inspection camera',
-      'pipe inspection',
-      'video inspeccion',
-      'video inspección',
-      'cctv',
-      'inspeccion con camara',
-      'inspeccion de tuberia'
-    ]
-  },
-  calentador: {
-    numbers: ['4'],
-    keywords: [
-      'calentador',
-      'agua caliente',
-      'no hay agua caliente',
-      'heater',
-      'water heater',
-      'boiler',
-      'tankless',
-      'gas heater',
-      'electric heater'
-    ]
-  },
-  otro: {
-    numbers: ['5'],
-    keywords: [
-      'otro',
-      'otros',
-      'other',
-      'something else',
-      'general plumbing',
-      'servicio general',
-      'consulta',
-      'plomeria',
-      'plumbing'
-    ]
-  },
-  cita: {
-    numbers: ['6'],
-    keywords: [
-      'cita',
-      'appointment',
-      'schedule',
-      'agendar',
-      'reservar',
-      'book',
-      'book a visit'
-    ]
-  }
+// =========================
+// Servicios y keywords
+// =========================
+const SERVICE_KEYS = ['destape', 'fuga', 'camara', 'calentador', 'otro', 'cita'];
+
+const SERVICE_KEYWORDS = {
+  destape: [
+    'destape',
+    'destapar',
+    'tapon',
+    'tapada',
+    'tapado',
+    'obstruccion',
+    'obstruccion',
+    'drenaje',
+    'desague',
+    'desague',
+    'fregadero',
+    'lavaplatos',
+    'inodoro',
+    'toilet',
+    'ducha',
+    'lavamanos',
+    'banera',
+    'banera',
+    'principal',
+    'linea principal',
+    'drain',
+    'drain cleaning',
+    'unclog',
+    'clogged',
+    'sewer',
+  ],
+  fuga: [
+    'fuga',
+    'goteo',
+    'goteando',
+    'salidero',
+    'fuga de agua',
+    'humedad',
+    'filtracion',
+    'filtracion',
+    'leak',
+    'water leak',
+    'leaking',
+    'moisture',
+  ],
+  camara: [
+    'camara',
+    'camara',
+    'video inspeccion',
+    'inspeccion',
+    'inspection',
+    'camera inspection',
+    'sewer camera',
+  ],
+  calentador: [
+    'calentador',
+    'boiler',
+    'heater',
+    'water heater',
+    'gas',
+    'electrico',
+    'electric',
+    'hot water',
+    'agua caliente',
+  ],
+  otro: [
+    'otro',
+    'otros',
+    'servicio',
+    'consulta',
+    'presupuesto',
+    'cotizacion',
+    'other',
+    'plumbing',
+    'problem',
+  ],
+  cita: [
+    'cita',
+    'appointment',
+    'schedule',
+    'agendar',
+    'reservar',
+  ],
 };
 
-function classifyService(bodyRaw) {
-  const t = norm(bodyRaw);
+function matchService(bodyRaw) {
+  const txt = norm(bodyRaw);
 
-  if (/^[1-6]$/.test(t)) {
-    for (const [service, cfg] of Object.entries(SERVICE_KEYS)) {
-      if (cfg.numbers.includes(t)) return service;
+  // Números 1–6
+  const mapNums = {
+    '1': 'destape',
+    '2': 'fuga',
+    '3': 'camara',
+    '4': 'calentador',
+    '5': 'otro',
+    '6': 'cita',
+  };
+  if (mapNums[txt]) return mapNums[txt];
+
+  // Palabras
+  for (const key of SERVICE_KEYS) {
+    const list = SERVICE_KEYWORDS[key];
+    if (list.some((w) => txt.includes(w))) {
+      return key;
     }
   }
-
-  for (const [service, cfg] of Object.entries(SERVICE_KEYS)) {
-    if (cfg.keywords.some(k => t.includes(k))) return service;
-  }
-
   return null;
 }
 
-// ===== TEXTOS =====
-function buildMenu(lang) {
-  const baseFooter =
-    '📞 Teléfono / Phone: 787-922-0068\n' +
-    '📘 Facebook: https://www.facebook.com/destapesPR/\n';
+// =========================
+// Textos de menús
+// =========================
+const PHONE = '+1 787-922-0068';
+const FB_LINK = 'https://www.facebook.com/destapesPR/';
 
+function mainMenu(lang) {
   if (lang === 'en') {
     return (
-      '✅ Language set to English.\n\n' +
-      '👋 DestapesPR – Customer service\n\n' +
-      '🌐 Language / Idioma\n' +
-      '• Type "english" to stay in English\n' +
-      '• Escribe "español" para cambiar a español\n\n' +
-      'Please select a number or type the service you need:\n\n' +
-      '1️⃣ Drain cleaning (clogs / blocked drains)\n' +
-      '2️⃣ Water leak (leaks / moisture)\n' +
-      '3️⃣ Camera inspection (pipes)\n' +
+      '👋 Welcome to DestapesPR.\n\n' +
+      'Please choose a number or type the service you need:\n\n' +
+      '1️⃣ Drain cleaning (clogged drains/pipes)\n' +
+      '2️⃣ Leak (water leaks / dampness)\n' +
+      '3️⃣ Camera inspection (video)\n' +
       '4️⃣ Water heater (gas or electric)\n' +
       '5️⃣ Other plumbing service\n' +
-      '6️⃣ Schedule an appointment\n\n' +
-      'Commands:\n' +
+      '6️⃣ Appointment / schedule a visit\n\n' +
+      '💬 Commands:\n' +
       'Type "start", "menu" or "back" to return to this menu.\n' +
-      'Type "spanish" or "español" to switch to Spanish.\n\n' +
-      baseFooter +
-      '\n— DestapesPR 🇵🇷 – Bilingual ES/EN'
+      'Type "english" or "español / espanol" to change language.\n\n' +
+      `📞 Phone: ${PHONE}\n` +
+      `📘 Facebook: ${FB_LINK}`
     );
   }
 
-  // Español
+  // Español por defecto
   return (
-    '✅ Idioma establecido a español.\n\n' +
-    '👋 DestapesPR – Servicio al cliente\n\n' +
-    '🌐 Idioma / Language\n' +
-    '• Escribe "español" para continuar en español\n' +
-    '• Type "english" to switch to English\n\n' +
+    '👋 Bienvenido a DestapesPR.\n\n' +
     'Por favor, selecciona un número o escribe el servicio que necesitas:\n\n' +
-    '1️⃣ Destape (drenajes/tuberías tapadas)\n' +
-    '2️⃣ Fuga de agua\n' +
-    '3️⃣ Inspección con cámara\n' +
-    '4️⃣ Calentador de agua\n' +
-    '5️⃣ Otro servicio\n' +
-    '6️⃣ Cita\n\n' +
-    '🧾 Comandos:\n' +
+    '1️⃣ Destape (drenajes o tuberías tapadas)\n' +
+    '2️⃣ Fuga de agua (goteos / filtraciones)\n' +
+    '3️⃣ Inspección con cámara (video)\n' +
+    '4️⃣ Calentador de agua (gas o eléctrico)\n' +
+    '5️⃣ Otro servicio de plomería\n' +
+    '6️⃣ Cita / coordinar visita\n\n' +
+    '💬 Comandos:\n' +
     'Escribe "inicio", "menu" o "volver" para regresar a este menú.\n' +
-    'Escribe "english" para cambiar a inglés.\n\n' +
-    baseFooter +
-    '\n— DestapesPR 🇵🇷 – Bot bilingüe ES/EN'
+    'Escribe "english" o "español / espanol" para cambiar de idioma.\n\n' +
+    `📞 Teléfono: ${PHONE}\n` +
+    `📘 Facebook: ${FB_LINK}`
   );
 }
 
-function buildServicePrompt(lang, service) {
-  const titles = {
-    destape: lang === 'en' ? 'Drain cleaning' : 'Destape',
-    fuga: lang === 'en' ? 'Water leak' : 'Fuga de agua',
-    camara: lang === 'en' ? 'Camera inspection' : 'Inspección con cámara',
-    calentador: lang === 'en' ? 'Water heater' : 'Calentador de agua',
-    otro: lang === 'en' ? 'Other service' : 'Otro servicio',
-    cita: lang === 'en' ? 'Appointment' : 'Cita'
-  };
+function servicePrompt(service, lang) {
+  if (service === 'destape') {
+    if (lang === 'en') {
+      return (
+        '✅ Selected service: Drain cleaning\n\n' +
+        'Please send everything in a single message:\n' +
+        '• 🧑‍🎓 Full name\n' +
+        '• 📞 Contact number (US/PR)\n' +
+        '• 📍 City / area / sector\n' +
+        '• 📝 Short description of the issue (sink, toilet, main line, etc.)\n\n' +
+        'Example:\n' +
+        `"I'm Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"\n\n` +
+        'We will review your information and contact you as soon as possible.'
+      );
+    }
+    return (
+      '✅ Servicio seleccionado: Destape\n\n' +
+      'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
+      '• 🧑‍🎓 Nombre completo\n' +
+      '• 📞 Número de contacto (787/939 o EE.UU.)\n' +
+      '• 📍 Zona / municipio / sector\n' +
+      '• 📝 Descripción breve del problema (fregadero, inodoro, línea principal, etc.)\n\n' +
+      'Ejemplo:\n' +
+      `"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"\n\n` +
+      'Revisaremos tu información y nos comunicaremos lo antes posible.'
+    );
+  }
 
+  if (service === 'fuga') {
+    if (lang === 'en') {
+      return (
+        '✅ Selected service: Water leak\n\n' +
+        'Please send everything in a single message:\n' +
+        '• 🧑‍🎓 Full name\n' +
+        '• 📞 Contact number (US/PR)\n' +
+        '• 📍 City / area / sector\n' +
+        '• 📝 Where do you see the leak or dampness? (wall, ceiling, floor, etc.)\n\n' +
+        'Example:\n' +
+        `"I'm Ana Rivera, 939-555-9999, Caguas, water leak in the bathroom ceiling"\n\n` +
+        'We will review your information and contact you as soon as possible.'
+      );
+    }
+    return (
+      '✅ Servicio seleccionado: Fuga de agua\n\n' +
+      'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
+      '• 🧑‍🎓 Nombre completo\n' +
+      '• 📞 Número de contacto (787/939 o EE.UU.)\n' +
+      '• 📍 Zona / municipio / sector\n' +
+      '• 📝 Dónde notas la fuga o la humedad (pared, techo, piso, etc.)\n\n' +
+      'Ejemplo:\n' +
+      `"Me llamo Ana Rivera, 939-555-9999, Caguas, fuga en el techo del baño"\n\n` +
+      'Revisaremos tu información y nos comunicaremos lo antes posible.'
+    );
+  }
+
+  if (service === 'camara') {
+    if (lang === 'en') {
+      return (
+        '✅ Selected service: Camera inspection\n\n' +
+        'Please send everything in a single message:\n' +
+        '• 🧑‍🎓 Full name\n' +
+        '• 📞 Contact number (US/PR)\n' +
+        '• 📍 City / area / sector\n' +
+        '• 📝 Area to inspect (bathroom, kitchen, main line, etc.)\n\n' +
+        'Example:\n' +
+        `"I'm Ana Rivera, 939-555-9999, Caguas, camera inspection in main sewer line"\n\n` +
+        'We will review your information and contact you as soon as possible.'
+      );
+    }
+    return (
+      '✅ Servicio seleccionado: Inspección con cámara\n\n' +
+      'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
+      '• 🧑‍🎓 Nombre completo\n' +
+      '• 📞 Número de contacto (787/939 o EE.UU.)\n' +
+      '• 📍 Zona / municipio / sector\n' +
+      '• 📝 Área a inspeccionar (baño, cocina, línea principal, etc.)\n\n' +
+      'Ejemplo:\n' +
+      `"Me llamo Ana Rivera, 939-555-9999, Caguas, inspección con cámara en la línea principal"\n\n` +
+      'Revisaremos tu información y nos comunicaremos lo antes posible.'
+    );
+  }
+
+  if (service === 'calentador') {
+    if (lang === 'en') {
+      return (
+        '✅ Selected service: Water heater (gas or electric)\n\n' +
+        'Please send everything in a single message:\n' +
+        '• 🧑‍🎓 Full name\n' +
+        '• 📞 Contact number (US/PR)\n' +
+        '• 📍 City / area / sector\n' +
+        '• 📝 Type of heater and problem (gas/electric, not heating, leaking, etc.)\n\n' +
+        'Example:\n' +
+        `"I'm Ana Rivera, 939-555-9999, Caguas, electric water heater not heating"\n\n` +
+        'We will review your information and contact you as soon as possible.'
+      );
+    }
+    return (
+      '✅ Servicio seleccionado: Calentador de agua\n\n' +
+      'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
+      '• 🧑‍🎓 Nombre completo\n' +
+      '• 📞 Número de contacto (787/939 o EE.UU.)\n' +
+      '• 📍 Zona / municipio / sector\n' +
+      '• 📝 Tipo de calentador y problema (gas/eléctrico, no calienta, fuga, etc.)\n\n' +
+      'Ejemplo:\n' +
+      `"Me llamo Ana Rivera, 939-555-9999, Caguas, calentador eléctrico no calienta"\n\n` +
+      'Revisaremos tu información y nos comunicaremos lo antes posible.'
+    );
+  }
+
+  if (service === 'cita') {
+    if (lang === 'en') {
+      return (
+        '✅ Selected: Schedule an appointment\n\n' +
+        'Please send everything in a single message:\n' +
+        '• 🧑‍🎓 Full name\n' +
+        '• 📞 Contact number (US/PR)\n' +
+        '• 📍 City / area / sector\n' +
+        '• 📝 Preferred days and time range\n' +
+        '• 📝 Short description of the plumbing issue\n\n' +
+        'Example:\n' +
+        `"I'm Ana Rivera, 939-555-9999, Caguas, prefer Monday–Wednesday 10am–1pm, kitchen sink clogged"\n\n` +
+        'We will review your information and contact you as soon as possible.'
+      );
+    }
+    return (
+      '✅ Servicio seleccionado: Cita / coordinar visita\n\n' +
+      'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
+      '• 🧑‍🎓 Nombre completo\n' +
+      '• 📞 Número de contacto (787/939 o EE.UU.)\n' +
+      '• 📍 Zona / municipio / sector\n' +
+      '• 📝 Días y horario aproximado de disponibilidad\n' +
+      '• 📝 Descripción breve del problema de plomería\n\n' +
+      'Ejemplo:\n' +
+      `"Me llamo Ana Rivera, 939-555-9999, Caguas, prefiero lunes a miércoles 10am–1pm, fregadero de cocina tapado"\n\n` +
+      'Revisaremos tu información y nos comunicaremos lo antes posible.'
+    );
+  }
+
+  // "otro"
   if (lang === 'en') {
     return (
-      `✅ Selected service: ${titles[service]}\n\n` +
-      'Please send everything in a *single message*:\n' +
-      '👤 Full name\n' +
-      '📞 Contact number (US/PR)\n' +
-      '📍 City / Area\n' +
-      '📝 Short description of the issue\n\n' +
+      '✅ Selected service: Other plumbing service\n\n' +
+      'Please send everything in a single message:\n' +
+      '• 🧑‍🎓 Full name\n' +
+      '• 📞 Contact number (US/PR)\n' +
+      '• 📍 City / area / sector\n' +
+      '• 📝 Short description of the service you need\n\n' +
       'Example:\n' +
-      `"I'm Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"\n\n` +
-      'We will review your information and contact you as soon as possible.\n' +
-      'Thank you for choosing DestapesPR 🇵🇷'
+      `"I'm Ana Rivera, 939-555-9999, Caguas, need estimate for bathroom remodeling"\n\n` +
+      'We will review your information and contact you as soon as possible.'
     );
   }
-
   return (
-    `✅ Servicio seleccionado: ${titles[service]}\n\n` +
-    'Vamos a coordinar. Por favor envía *todo en un solo mensaje*:\n' +
-    '👤 Nombre completo\n' +
-    '📞 Número de contacto (787/939 o EE.UU.)\n' +
-    '📍 Zona / municipio / sector\n' +
-    '📝 Descripción breve del problema\n\n' +
+    '✅ Servicio seleccionado: Otro servicio de plomería\n\n' +
+    'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
+    '• 🧑‍🎓 Nombre completo\n' +
+    '• 📞 Número de contacto (787/939 o EE.UU.)\n' +
+    '• 📍 Zona / municipio / sector\n' +
+    '• 📝 Descripción breve del servicio que necesitas\n\n' +
     'Ejemplo:\n' +
-    '"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"\n\n' +
-    'Revisaremos tu información y nos comunicaremos lo antes posible.\n' +
-    'Gracias por tu patrocinio.\n' +
-    '— DestapesPR 🇵🇷'
+    `"Me llamo Ana Rivera, 939-555-9999, Caguas, necesito estimado para remodelación de baño"\n\n` +
+    'Revisaremos tu información y nos comunicaremos lo antes posible.'
   );
 }
 
-function buildFinalThanks(lang, service, detailsText) {
-  const titles = {
-    destape: lang === 'en' ? 'Drain cleaning' : 'Destape',
-    fuga: lang === 'en' ? 'Water leak' : 'Fuga de agua',
-    camara: lang === 'en' ? 'Camera inspection' : 'Inspección con cámara',
-    calentador: lang === 'en' ? 'Water heater' : 'Calentador de agua',
-    otro: lang === 'en' ? 'Other service' : 'Otro servicio',
-    cita: lang === 'en' ? 'Appointment' : 'Cita'
-  };
-
+function detailsThankYou(service, lang, details) {
   if (lang === 'en') {
     return (
-      `✅ Got it. I saved your details for *${titles[service] || 'service'}*:\n` +
-      `"${detailsText}"\n\n` +
-      'We will contact you shortly to coordinate.\n' +
-      'Thank you for your business.\n' +
-      '— DestapesPR 🇵🇷'
+      '✅ Thank you, we saved your information.\n\n' +
+      `Service: ${serviceName(service, lang)}\n` +
+      `Details:\n"${details}"\n\n` +
+      'We will review your information and contact you as soon as possible.\n\n' +
+      'To return to the menu, type "menu" or "start".'
     );
   }
-
   return (
-    `✅ Perfecto. Guardé tus datos para *${titles[service] || 'servicio'}*:\n` +
-    `"${detailsText}"\n\n` +
-    'Próximamente nos estaremos comunicando para coordinar.\n' +
-    'Gracias por su patrocinio.\n' +
-    '— DestapesPR 🇵🇷'
+    '✅ Gracias, hemos guardado tu información.\n\n' +
+    `Servicio: ${serviceName(service, lang)}\n` +
+    `Detalles:\n"${details}"\n\n` +
+    'Revisaremos tu información y nos comunicaremos lo antes posible.\n\n' +
+    'Para regresar al menú escribe "menu", "inicio" o "volver".'
   );
 }
 
-// ===== TWILIO XML =====
+function serviceName(service, lang) {
+  const names = {
+    destape: { es: 'Destape', en: 'Drain cleaning' },
+    fuga: { es: 'Fuga de agua', en: 'Water leak' },
+    camara: { es: 'Inspección con cámara', en: 'Camera inspection' },
+    calentador: { es: 'Calentador de agua', en: 'Water heater' },
+    otro: { es: 'Otro servicio de plomería', en: 'Other plumbing service' },
+    cita: { es: 'Cita / coordinar visita', en: 'Appointment' },
+  };
+  return (names[service] || names.otro)[lang === 'en' ? 'en' : 'es'];
+}
+
+// =========================
+// Twilio helpers
+// =========================
 function sendTwilioXML(res, text) {
   const safe = String(text)
     .replace(/&/g, '&amp;')
@@ -377,96 +532,122 @@ function sendTwilioXML(res, text) {
   return res.send(xml);
 }
 
-// ===== WEBHOOK =====
-app.post('/webhook/whatsapp', async (req, res) => {
-  try {
-    await initDB();
+// =========================
+// Rutas de diagnóstico
+// =========================
+app.get('/__version', (req, res) => {
+  res.json({ ok: true, tag: TAG, tz: 'America/Puerto_Rico' });
+});
 
-    const from =
-      req.body.From ||
+app.get('/', (req, res) => {
+  res.send('DestapesPR WhatsApp bot activo ✅');
+});
+
+// =========================
+// Webhook principal
+// =========================
+app.post('/webhook/whatsapp', async (req, res) => {
+  await initDB();
+
+  const from =
+    (req.body.From ||
       req.body.from ||
       req.body.WaId ||
-      '';
-    const bodyRaw = (req.body.Body || req.body.body || '').toString().trim();
-    const bodyNorm = norm(bodyRaw);
+      '').toString();
+  const bodyRaw = (req.body.Body || req.body.body || '').toString();
 
-    if (!from) {
-      return sendTwilioXML(res, 'Missing sender.');
-    }
-
-    let session = await getSession(from);
-    let lang = detectLang(bodyRaw, session?.lang || 'es');
-
-    const isMenuCmd =
-      ['inicio', 'menu', 'menú', 'volver'].includes(bodyNorm) ||
-      ['start', 'menu', 'back', 'help', 'hi', 'hello'].includes(bodyNorm);
-
-    // Cambio explícito de idioma
-    if (/^\s*(english|ingles|inglés)\s*$/i.test(bodyRaw)) {
-      lang = 'en';
-      session = await saveSession(from, { lang, awaiting_details: 0, last_service: null });
-      return sendTwilioXML(res, buildMenu(lang));
-    }
-    if (/^\s*(espanol|español|spanish)\s*$/i.test(bodyRaw)) {
-      lang = 'es';
-      session = await saveSession(from, { lang, awaiting_details: 0, last_service: null });
-      return sendTwilioXML(res, buildMenu(lang));
-    }
-
-    if (!bodyRaw || isMenuCmd) {
-      await saveSession(from, { lang, awaiting_details: 0, last_service: null });
-      return sendTwilioXML(res, buildMenu(lang));
-    }
-
-    // Si estamos esperando detalles
-    if (session?.awaiting_details && session.last_service) {
-      await saveSession(from, {
-        lang,
-        awaiting_details: 0,
-        last_details: bodyRaw
-      });
-      const reply = buildFinalThanks(lang, session.last_service, bodyRaw);
-      return sendTwilioXML(res, reply);
-    }
-
-    // Clasificar servicio
-    const service = classifyService(bodyRaw);
-    if (service) {
-      await saveSession(from, {
-        lang,
-        last_service: service,
-        awaiting_details: 1
-      });
-      const reply = buildServicePrompt(lang, service);
-      return sendTwilioXML(res, reply);
-    }
-
-    // No se entendió → mensaje + menú
-    const notUnderstood =
-      lang === 'en'
-        ? 'I did not understand your message. Returning to the main menu.\n\n'
-        : 'No entendí tu mensaje. Regresando al menú principal.\n\n';
-    const reply = notUnderstood + buildMenu(lang);
-    return sendTwilioXML(res, reply);
-  } catch (err) {
-    console.error('Error in /webhook/whatsapp', err);
-    return sendTwilioXML(res, 'Error interno. Intenta nuevamente más tarde.');
+  if (!from) {
+    return sendTwilioXML(res, 'Missing sender.');
   }
+
+  let session = (await getSession(from)) || {
+    from_number: from,
+    lang: 'es',
+    last_choice: null,
+    awaiting_details: 0,
+    details: null,
+    last_active: Date.now(),
+  };
+
+  // Detectar idioma (puede cambiarlo explícitamente)
+  const newLang = detectLanguage(bodyRaw, session.lang || 'es');
+  if (newLang !== session.lang) {
+    session = await saveSession(from, { lang: newLang });
+  }
+
+  const lang = session.lang || 'es';
+  const bodyNorm = norm(bodyRaw);
+
+  // Comandos de menú
+  const isMenuCommand =
+    ['inicio', 'menu', 'volver', 'start', 'back'].includes(bodyNorm);
+  const isLanguageCommand =
+    /\benglish\b/.test(bodyNorm) ||
+    /\bingles\b/.test(bodyNorm) ||
+    /\bingl[eé]s\b/.test(bodyNorm) ||
+    /\bespanol\b/.test(bodyNorm) ||
+    /\bespa[ñn]ol\b/.test(bodyNorm) ||
+    /\bspanish\b/.test(bodyNorm);
+
+  // 1) Comandos de menú → siempre mandan al menú principal
+  if (!bodyNorm || isMenuCommand) {
+    await saveSession(from, {
+      last_choice: null,
+      awaiting_details: 0,
+      details: null,
+    });
+    const reply =
+      lang === 'en'
+        ? '🔁 Returning to the main menu.\n\n' + mainMenu(lang)
+        : '🔁 Regresando al menú principal.\n\n' + mainMenu(lang);
+    return sendTwilioXML(res, reply);
+  }
+
+  // 2) Comando de idioma explícito → confirmar + menú
+  if (isLanguageCommand) {
+    const confirm =
+      newLang === 'en'
+        ? '✅ Language set to English.\n\n'
+        : '✅ Idioma establecido a español.\n\n';
+    await saveSession(from, { lang: newLang });
+    return sendTwilioXML(res, confirm + mainMenu(newLang));
+  }
+
+  // 3) Si está esperando detalles, PRIORIDAD: tomar el mensaje como detalles
+  if (session.awaiting_details && session.last_choice) {
+    await saveSession(from, {
+      awaiting_details: 0,
+      details: bodyRaw,
+    });
+    const reply = detailsThankYou(session.last_choice, lang, bodyRaw);
+    return sendTwilioXML(res, reply);
+  }
+
+  // 4) Detectar servicio (por número o palabras)
+  const svc = matchService(bodyRaw);
+  if (svc) {
+    await saveSession(from, {
+      last_choice: svc,
+      awaiting_details: 1,
+      details: null,
+    });
+    const reply = servicePrompt(svc, lang);
+    return sendTwilioXML(res, reply);
+  }
+
+  // 5) Fallback: no se entendió → mostrar menú en el idioma actual
+  const fallback =
+    lang === 'en'
+      ? "I didn't understand your message.\n\n" +
+        mainMenu(lang)
+      : 'No entendí tu mensaje.\n\n' + mainMenu(lang);
+
+  return sendTwilioXML(res, fallback);
 });
 
-// ===== HEALTH & VERSION =====
-app.get('/__version', (_req, res) => {
-  res.json({
-    ok: true,
-    tag: TAG,
-    tz: 'America/Puerto_Rico'
-  });
-});
-
-app.get('/', (_req, res) => {
-  res.send(`${TAG} activo ✅`);
-});
-
+// =========================
+// Arrancar servidor
+// =========================
 app.listen(PORT, () => {
-  console.log(`💬 DestapesPR escuchando en http://localhost:${PORT}`);
+  console.log(`💬 DestapesPR bot escuchando en http://localhost:${PORT}`);
 });
