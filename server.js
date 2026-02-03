@@ -14,8 +14,12 @@ const TAG = 'DestapesPR Bot 5 Pro 🇵🇷';
 
 let db;
 
-const SESSION_TTL_MS = 48 * 60 * 60 * 1000; // 48h (limpieza DB)
-const WELCOME_GAP_MS = 12 * 60 * 60 * 1000; // bienvenida "de nuevo" si estuvo inactivo 12h+
+const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
+const WELCOME_GAP_MS = 12 * 60 * 60 * 1000;
+
+// Export a Sheets (Apps Script) webhook (opcional)
+const LEADS_WEBHOOK_URL = process.env.LEADS_WEBHOOK_URL || '';
+const LEADS_WEBHOOK_TOKEN = process.env.LEADS_WEBHOOK_TOKEN || '';
 
 async function initDB() {
   if (db) return db;
@@ -27,6 +31,8 @@ async function initDB() {
       from_number TEXT PRIMARY KEY,
       lang TEXT DEFAULT 'es',
       name TEXT,
+      phone TEXT,
+      city TEXT,
       last_choice TEXT,
       awaiting_details INTEGER DEFAULT 0,
       details TEXT,
@@ -40,6 +46,8 @@ async function initDB() {
 
   if (!names.includes('lang')) await db.exec(`ALTER TABLE sessions ADD COLUMN lang TEXT DEFAULT 'es';`);
   if (!names.includes('name')) await db.exec(`ALTER TABLE sessions ADD COLUMN name TEXT;`);
+  if (!names.includes('phone')) await db.exec(`ALTER TABLE sessions ADD COLUMN phone TEXT;`);
+  if (!names.includes('city')) await db.exec(`ALTER TABLE sessions ADD COLUMN city TEXT;`);
   if (!names.includes('first_seen')) await db.exec(`ALTER TABLE sessions ADD COLUMN first_seen INTEGER;`);
 
   await db.run('DELETE FROM sessions WHERE last_active < ?', Date.now() - SESSION_TTL_MS);
@@ -57,6 +65,8 @@ async function saveSession(from, patch = {}) {
   const next = {
     lang: patch.lang ?? prev.lang ?? 'es',
     name: patch.name ?? prev.name ?? null,
+    phone: patch.phone ?? prev.phone ?? null,
+    city: patch.city ?? prev.city ?? null,
     last_choice: patch.last_choice ?? prev.last_choice ?? null,
     awaiting_details: patch.awaiting_details ?? prev.awaiting_details ?? 0,
     details: patch.details ?? prev.details ?? null,
@@ -66,18 +76,31 @@ async function saveSession(from, patch = {}) {
 
   await db.run(
     `
-    INSERT INTO sessions (from_number, lang, name, last_choice, awaiting_details, details, first_seen, last_active)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO sessions (from_number, lang, name, phone, city, last_choice, awaiting_details, details, first_seen, last_active)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(from_number) DO UPDATE SET
       lang = excluded.lang,
       name = excluded.name,
+      phone = excluded.phone,
+      city = excluded.city,
       last_choice = excluded.last_choice,
       awaiting_details = excluded.awaiting_details,
       details = excluded.details,
       first_seen = excluded.first_seen,
       last_active = excluded.last_active
   `,
-    [from, next.lang, next.name, next.last_choice, next.awaiting_details, next.details, next.first_seen, next.last_active]
+    [
+      from,
+      next.lang,
+      next.name,
+      next.phone,
+      next.city,
+      next.last_choice,
+      next.awaiting_details,
+      next.details,
+      next.first_seen,
+      next.last_active,
+    ]
   );
 
   return next;
@@ -95,7 +118,7 @@ function norm(str) {
 function titleCaseName(s) {
   const raw = String(s || '').trim();
   if (!raw) return null;
-  const cleaned = raw.replace(/\s+/g, ' ').slice(0, 40);
+  const cleaned = raw.replace(/\s+/g, ' ').slice(0, 50);
   return cleaned
     .split(' ')
     .map((w) => (w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : ''))
@@ -103,22 +126,53 @@ function titleCaseName(s) {
     .trim();
 }
 
-function extractNameFromDetails(detailsRaw) {
+function extractPhone(raw) {
+  const s = String(raw || '');
+  const digits = s.replace(/[^\d]/g, '');
+
+  // PR/US typical lengths
+  if (digits.length === 10) return digits.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+  if (digits.length === 11 && digits.startsWith('1')) {
+    const d = digits.slice(1);
+    return d.replace(/(\d{3})(\d{3})(\d{4})/, '$1-$2-$3');
+  }
+  return null;
+}
+
+// Intenta extraer: nombre, teléfono, ciudad/zona a partir del formato "Nombre, Tel, Ciudad, ..."
+function extractLeadFields(detailsRaw) {
   const raw = String(detailsRaw || '').trim();
-  if (!raw) return null;
+  if (!raw) return { name: null, phone: null, city: null };
 
-  let firstPart = raw.split(',')[0]?.trim();
-  if (!firstPart) return null;
+  const parts = raw.split(',').map((p) => p.trim()).filter(Boolean);
 
-  firstPart = firstPart.replace(/^(me llamo|soy|mi nombre es)\s+/i, '');
-  firstPart = firstPart.replace(/^(i am|im|i'm|my name is)\s+/i, '');
+  let name = null;
+  let phone = extractPhone(raw);
+  let city = null;
 
-  if (norm(firstPart).length < 3) return null;
-  return titleCaseName(firstPart);
+  if (parts[0]) {
+    let p0 = parts[0];
+    p0 = p0.replace(/^(me llamo|soy|mi nombre es)\s+/i, '');
+    p0 = p0.replace(/^(i am|im|i'm|my name is)\s+/i, '');
+    if (norm(p0).length >= 3) name = titleCaseName(p0);
+  }
+
+  // ciudad: el primer segmento “que parezca” ciudad (sin muchos números)
+  for (const p of parts.slice(1)) {
+    const pn = norm(p);
+    const hasDigits = /\d/.test(pn);
+    const tooShort = pn.length < 3;
+    if (!hasDigits && !tooShort) {
+      city = titleCaseName(p);
+      break;
+    }
+  }
+
+  return { name, phone, city };
 }
 
 const EN_HINTS = ['drain','unclog','clogged','leak','camera','inspection','heater','appointment','schedule','water','toilet','sink','hello','hi'];
-const ES_HINTS = ['destape','tapon','tapada','fuga','goteo','camara','cita','calentador','inodoro','fregadero','banera','hola','buenas'];
+const ES_HINTS = ['destape','tapon','tapada','tapado','tapao','fuga','goteo','camara','cita','calentador','inodoro','fregadero','banera','buenas','hola'];
 
 function detectLanguage(bodyRaw, previousLang = 'es') {
   const txt = norm(bodyRaw);
@@ -139,12 +193,17 @@ function detectLanguage(bodyRaw, previousLang = 'es') {
 }
 
 const SERVICE_KEYS = ['destape','fuga','camara','calentador','otro','cita'];
+
 const SERVICE_KEYWORDS = {
-  destape: ['destape','destapar','tapon','tapada','tapado','obstruccion','drenaje','desague','fregadero','lavaplatos','inodoro','toilet','ducha','lavamanos','banera','bañera','principal','linea principal','drain','drain cleaning','unclog','clogged','sewer'],
-  fuga: ['fuga','goteo','goteando','salidero','fuga de agua','humedad','filtracion','leak','water leak','leaking','moisture'],
-  camara: ['camara','cámara','video inspeccion','inspeccion','inspection','camera inspection','sewer camera'],
-  calentador: ['calentador','boiler','heater','water heater','gas','electrico','eléctrico','electric','hot water','agua caliente'],
-  otro: ['otro','otros','servicio','consulta','presupuesto','cotizacion','cotización','other','plumbing','problem'],
+  destape: [
+    'destape','destapar','tapon','tapada','tapado','tapao','obstruccion','drenaje','desague',
+    'fregadero','lavaplatos','inodoro','toilet','ducha','lavamanos','banera','banera',
+    'principal','linea principal','drain','unclog','clogged','sewer','tubo','bajante','bajada','alcantarillado'
+  ],
+  fuga: ['fuga','goteo','goteando','salidero','humedad','filtracion','leak','leaking','moisture'],
+  camara: ['camara','video inspeccion','inspeccion','inspection','camera inspection','sewer camera'],
+  calentador: ['calentador','heater','water heater','boiler','gas','electrico','electric','hot water','agua caliente'],
+  otro: ['otro','servicio','consulta','presupuesto','cotizacion','other','plumbing','problem','presion','no tengo agua','cisterna','bomba'],
   cita: ['cita','appointment','schedule','agendar','reservar'],
 };
 
@@ -158,6 +217,18 @@ function matchService(bodyRaw) {
     if (SERVICE_KEYWORDS[key].some((w) => txt.includes(norm(w)))) return key;
   }
   return null;
+}
+
+// Fallback inteligente
+function wantsPrice(bodyNorm) {
+  return ['precio','precios','cuanto','cuánto','costo','costos','tarifa','valor','estimate','estimado','quote','cotizacion','cotización'].some((k) =>
+    bodyNorm.includes(norm(k))
+  );
+}
+function isUrgent(bodyNorm) {
+  return ['urgente','emergencia','emergency','hoy','ahora','asap','ya','inundacion','inundación','se esta regando','se esta botando','flood'].some((k) =>
+    bodyNorm.includes(norm(k))
+  );
 }
 
 const PHONE = '+1 787-922-0068';
@@ -199,8 +270,7 @@ function mainMenu(lang) {
   );
 }
 
-// ✅ Solo se usa para: (1) primera vez, o (2) regreso tras tiempo sin escribir.
-// NO se usa al escoger servicio, ni al abrir menú por comandos.
+// Bienvenida SOLO 1) primera vez o 2) regreso tras tiempo sin escribir
 function welcomeText({ lang, name, returning }) {
   if (lang === 'en') {
     if (returning && name) return `👋 Hi ${name}! Welcome back to DestapesPR.\n\n`;
@@ -224,7 +294,6 @@ function serviceName(service, lang) {
   return (names[service] || names.otro)[lang === 'en' ? 'en' : 'es'];
 }
 
-// ✅ Todos los servicios ahora incluyen ejemplo “en una oración” (ES/EN)
 function servicePrompt(service, lang) {
   if (service === 'destape') {
     return lang === 'en'
@@ -338,7 +407,6 @@ function servicePrompt(service, lang) {
           'Revisaremos tu información y nos comunicaremos lo antes posible.';
   }
 
-  // otro
   return lang === 'en'
     ? '✅ Selected service: Other plumbing service\n\n' +
         'Please send everything in a single message:\n' +
@@ -360,15 +428,21 @@ function servicePrompt(service, lang) {
         'Revisaremos tu información y nos comunicaremos lo antes posible.';
 }
 
-function detailsThankYou(service, lang, details) {
+function detailsThankYou(service, lang, details, session) {
+  const sName = session?.name ? ` ${session.name}` : '';
+  const sCity = session?.city ? ` (${session.city})` : '';
+  const sPhone = session?.phone ? ` • ${session.phone}` : '';
+
   return lang === 'en'
     ? '✅ Thank you, we saved your information.\n\n' +
         `Service: ${serviceName(service, lang)}\n` +
+        `Contact:${sName}${sCity}${sPhone}\n\n` +
         `Details:\n"${details}"\n\n` +
         'We will review your information and contact you as soon as possible.\n\n' +
         'To return to the menu, type "menu" or "start".'
     : '✅ Gracias, hemos guardado tu información.\n\n' +
         `Servicio: ${serviceName(service, lang)}\n` +
+        `Contacto:${sName}${sCity}${sPhone}\n\n` +
         `Detalles:\n"${details}"\n\n` +
         'Revisaremos tu información y nos comunicaremos lo antes posible.\n\n' +
         'Para regresar al menú escribe "menu", "inicio" o "volver".';
@@ -381,13 +455,34 @@ function sendTwilioXML(res, text) {
   return res.send(xml);
 }
 
-app.get('/__version', (req, res) => {
-  res.json({ ok: true, tag: TAG, tz: 'America/Puerto_Rico' });
-});
+async function postLeadToWebhook(payload) {
+  if (!LEADS_WEBHOOK_URL) return { ok: false, skipped: true };
 
-app.get('/', (req, res) => {
-  res.send('DestapesPR WhatsApp bot activo ✅');
-});
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 4000);
+
+  try {
+    const res = await fetch(LEADS_WEBHOOK_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(LEADS_WEBHOOK_TOKEN ? { Authorization: `Bearer ${LEADS_WEBHOOK_TOKEN}` } : {}),
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    clearTimeout(t);
+    return { ok: res.ok, status: res.status };
+  } catch (e) {
+    clearTimeout(t);
+    return { ok: false, error: String(e?.message || e) };
+  }
+}
+
+// Rutas
+app.get('/__version', (req, res) => res.json({ ok: true, tag: TAG, tz: 'America/Puerto_Rico' }));
+app.get('/', (req, res) => res.send('DestapesPR WhatsApp bot activo ✅'));
 
 app.post('/webhook/whatsapp', async (req, res) => {
   await initDB();
@@ -426,16 +521,14 @@ app.post('/webhook/whatsapp', async (req, res) => {
     /\bespa[ñn]ol\b/.test(bodyNorm) ||
     /\bspanish\b/.test(bodyNorm);
 
-  // ✅ Bienvenida SOLO aquí: primera vez o regreso tras inactividad
+  // 1) Bienvenida SOLO primera vez o retorno tras inactividad
   if (isFirstTime || isReturningAfterGap) {
     await saveSession(from, { last_choice: null, awaiting_details: 0, details: null });
-    return sendTwilioXML(
-      res,
-      welcomeText({ lang, name: session.name, returning: !isFirstTime }) + mainMenu(lang)
-    );
+    const welcome = welcomeText({ lang, name: session.name, returning: !isFirstTime });
+    return sendTwilioXML(res, welcome + mainMenu(lang));
   }
 
-  // Menú por comando: NO repetir bienvenida (solo regresar al menú)
+  // 2) Menú por comando (sin repetir bienvenida)
   if (!bodyNorm || isMenuCommand) {
     await saveSession(from, { last_choice: null, awaiting_details: 0, details: null });
     const reply =
@@ -445,34 +538,62 @@ app.post('/webhook/whatsapp', async (req, res) => {
     return sendTwilioXML(res, reply);
   }
 
-  // Cambio de idioma explícito: NO repetir bienvenida (solo confirmar + menú)
+  // 3) Cambio de idioma (confirm + menú)
   if (isLanguageCommand) {
-    const confirm =
-      newLang === 'en'
-        ? '✅ Language set to English.\n\n'
-        : '✅ Idioma establecido a español.\n\n';
+    const confirm = newLang === 'en' ? '✅ Language set to English.\n\n' : '✅ Idioma establecido a español.\n\n';
     await saveSession(from, { lang: newLang });
     return sendTwilioXML(res, confirm + mainMenu(newLang));
   }
 
-  // Si está esperando detalles, guardar y (si se puede) capturar nombre
+  // 4) Si está esperando detalles, guardar + parsear campos + exportar
   if (session.awaiting_details && session.last_choice) {
-    const maybeName = extractNameFromDetails(bodyRaw);
-    await saveSession(from, {
+    const { name, phone, city } = extractLeadFields(bodyRaw);
+
+    session = await saveSession(from, {
       awaiting_details: 0,
       details: bodyRaw,
-      ...(maybeName ? { name: maybeName } : {}),
+      ...(name ? { name } : {}),
+      ...(phone ? { phone } : {}),
+      ...(city ? { city } : {}),
     });
-    return sendTwilioXML(res, detailsThankYou(session.last_choice, lang, bodyRaw));
+
+    // Export (no bloquea la respuesta; pero corre dentro del request)
+    postLeadToWebhook({
+      ts: new Date().toISOString(),
+      from_number: from,
+      lang: session.lang,
+      service: session.last_choice,
+      service_label: serviceName(session.last_choice, session.lang),
+      name: session.name || null,
+      phone: session.phone || null,
+      city: session.city || null,
+      details: bodyRaw,
+    }).catch(() => {});
+
+    return sendTwilioXML(res, detailsThankYou(session.last_choice, lang, bodyRaw, session));
   }
 
-  // Selección de servicio: NO repetir bienvenida (solo prompt del servicio)
+  // 5) Fallback inteligente (urgente / precio)
+  if (isUrgent(bodyNorm)) {
+    await saveSession(from, { last_choice: 'cita', awaiting_details: 1, details: null });
+    return sendTwilioXML(res, servicePrompt('cita', lang));
+  }
+
+  if (wantsPrice(bodyNorm)) {
+    const msg = lang === 'en'
+      ? '💲 Sure — to give you the right price, tell us which service you need (choose 1–6):\n\n'
+      : '💲 Claro — para darte el precio correcto, dime qué servicio necesitas (elige 1–6):\n\n';
+    return sendTwilioXML(res, msg + mainMenu(lang));
+  }
+
+  // 6) Detectar servicio normal
   const svc = matchService(bodyRaw);
   if (svc) {
     await saveSession(from, { last_choice: svc, awaiting_details: 1, details: null });
     return sendTwilioXML(res, servicePrompt(svc, lang));
   }
 
+  // 7) Fallback final
   const fallback =
     lang === 'en'
       ? "I didn't understand your message.\n\n" + mainMenu(lang)
