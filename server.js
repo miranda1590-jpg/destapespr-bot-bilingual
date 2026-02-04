@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import fetch from 'node-fetch';
 import express from 'express';
 import morgan from 'morgan';
 import sqlite3 from 'sqlite3';
