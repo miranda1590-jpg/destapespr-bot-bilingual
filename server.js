@@ -1,12 +1,13 @@
 // server.js - DestapesPR Bot 5 Pro 🇵🇷 (Bilingüe ES/EN)
 // ✅ Welcome after inactivity (12h)
-// ✅ "Hola/Hello/Hi" muestra menú (no "no entendí")
+// ✅ "Hola/Hello/Hi" muestra menú
 // ✅ Captura datos en 1 mensaje (con ejemplo ES/EN)
-// ✅ Guarda sesión en SQLite (48h TTL)
-// ✅ Exporta lead a Google Sheets (Apps Script Web App) con timeout 15s + retry
-// ✅ Fire-and-forget (no bloquea respuesta a Twilio)
+// ✅ SQLite sessions
+// ✅ Exporta lead a Google Sheets (Apps Script Web App)
+// ✅ Token va en el BODY (Apps Script compatible) + timeout 15s + retry
+//
 // ENV (Render):
-//   LEADS_WEBHOOK_URL = https://script.google.com/macros/s/XXXX/exec
+//   LEADS_WEBHOOK_URL   = https://script.google.com/macros/s/XXXX/exec
 //   LEADS_WEBHOOK_TOKEN = DESTAPESPR_TOKEN
 
 import 'dotenv/config';
@@ -65,7 +66,7 @@ async function initDB() {
     );
   `);
 
-  // migrations (safe)
+  // migrations
   const cols = await db.all(`PRAGMA table_info(sessions);`);
   const names = cols.map((c) => c.name);
 
@@ -76,7 +77,6 @@ async function initDB() {
   if (!names.includes('first_seen')) await db.exec(`ALTER TABLE sessions ADD COLUMN first_seen INTEGER;`);
 
   await db.run('DELETE FROM sessions WHERE last_active < ?', Date.now() - SESSION_TTL_MS);
-
   return db;
 }
 
@@ -176,7 +176,7 @@ function extractLeadFields(detailsRaw) {
     let p0 = parts[0];
     p0 = p0.replace(/^(me llamo|soy|mi nombre es)\s+/i, '');
     p0 = p0.replace(/^(i am|im|i'm|my name is)\s+/i, '');
-    p0 = p0.replace(/^["'`]+|["'`]+$/g, ''); // remove quotes
+    p0 = p0.replace(/^["'`]+|["'`]+$/g, '');
     if (norm(p0).length >= 3) name = titleCase(p0);
   }
 
@@ -412,7 +412,6 @@ function servicePrompt(service, lang) {
           'Revisaremos tu información y nos comunicaremos lo antes posible.';
   }
 
-  // otro
   return lang === 'en'
     ? '✅ Selected service: Other plumbing service\n\n' +
         commonEN +
@@ -462,7 +461,7 @@ function sendTwilioXML(res, text) {
 }
 
 // =========================
-// Google Sheets Webhook (15s + retry)
+// Google Sheets Webhook (token in BODY) + timeout 15s + retry
 // =========================
 async function postLeadToWebhook(payload) {
   if (!LEADS_WEBHOOK_URL) {
@@ -477,18 +476,17 @@ async function postLeadToWebhook(payload) {
     });
 
     const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 15000); // ✅ 15s
+    const t = setTimeout(() => controller.abort(), 15000);
 
     try {
       const res = await fetch(LEADS_WEBHOOK_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(LEADS_WEBHOOK_TOKEN
-            ? { Authorization: `Bearer ${LEADS_WEBHOOK_TOKEN}` }
-            : {}),
-        },
-        body: JSON.stringify(payload),
+        headers: { 'Content-Type': 'application/json' },
+        // ✅ token va en el BODY para evitar problemas con Authorization header en Apps Script
+        body: JSON.stringify({
+          token: LEADS_WEBHOOK_TOKEN || '',
+          ...payload,
+        }),
         signal: controller.signal,
       });
 
