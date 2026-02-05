@@ -1,4 +1,18 @@
 // server.js - DestapesPR Bot 5 Pro (bilingüe ES/EN) + Case ID + Admin WhatsApp Alerts
+// ✅ Welcome after inactivity (12h)
+// ✅ "Hola/Hello/Hi" muestra menú (no "no entendí")
+// ✅ Captura datos en 1 mensaje
+// ✅ Guarda sesión en SQLite (48h TTL)
+// ✅ Exporta lead a Google Sheets (Apps Script Web App) con timeout 6s
+// ✅ Notificaciones internas WhatsApp (Twilio REST) opcional
+// ENV (Render):
+//   LEADS_WEBHOOK_URL = https://script.google.com/macros/s/XXXX/exec
+//   LEADS_WEBHOOK_TOKEN = DESTAPESPR_TOKEN
+//   ADMIN_ALERTS_ENABLED = 1
+//   TWILIO_ACCOUNT_SID = ACxxxx
+//   TWILIO_AUTH_TOKEN = xxxx
+//   ADMIN_WHATSAPP_FROM = whatsapp:+14155238886 (o tu sender)
+//   ADMIN_WHATSAPP_TO = whatsapp:+1787XXXXXXX
 
 import 'dotenv/config';
 import express from 'express';
@@ -251,24 +265,41 @@ function matchService(bodyRaw) {
 }
 
 // =========================
-// Textos UI
+// Menús (ESTILO NUEVO)
 // =========================
 function mainMenu(lang) {
   if (lang === 'en') {
     return (
       '👋 Welcome to DestapesPR.\n\n' +
-      'Choose a number or type the service you need:\n\n' +
-      '1️⃣ Drain cleaning\n2️⃣ Leak\n3️⃣ Camera inspection\n4️⃣ Water heater\n5️⃣ Other\n6️⃣ Appointment\n\n' +
-      '💬 Commands: "start", "menu", "back". Language: "english" / "español".\n\n' +
-      `📞 ${PHONE}\n📘 ${FB_LINK}`
+      'Please select a number or type the service you need:\n\n' +
+      '1️⃣ Drain cleaning (clogged drains/pipes)\n' +
+      '2️⃣ Water leak (drips / moisture)\n' +
+      '3️⃣ Camera inspection (video)\n' +
+      '4️⃣ Water heater (gas or electric)\n' +
+      '5️⃣ Other plumbing service\n' +
+      '6️⃣ Appointment / schedule a visit\n\n' +
+      '💬 Commands:\n' +
+      'Type "start", "menu" or "back" to return to this menu.\n' +
+      'Type "english" or "español / espanol" to change language.\n\n' +
+      `📞 Phone: ${PHONE}\n` +
+      `📘 Facebook: ${FB_LINK}`
     );
   }
+
   return (
     '👋 Bienvenido a DestapesPR.\n\n' +
-    'Selecciona un número o escribe el servicio:\n\n' +
-    '1️⃣ Destape\n2️⃣ Fuga\n3️⃣ Cámara\n4️⃣ Calentador\n5️⃣ Otro\n6️⃣ Cita\n\n' +
-    '💬 Comandos: "inicio", "menu", "volver". Idioma: "english" / "español".\n\n' +
-    `📞 ${PHONE}\n📘 ${FB_LINK}`
+    'Por favor, selecciona un número o escribe el servicio que necesitas:\n\n' +
+    '1️⃣ Destape (drenajes o tuberías tapadas)\n' +
+    '2️⃣ Fuga de agua (goteos / filtraciones)\n' +
+    '3️⃣ Inspección con cámara (video)\n' +
+    '4️⃣ Calentador de agua (gas o eléctrico)\n' +
+    '5️⃣ Otro servicio de plomería\n' +
+    '6️⃣ Cita / coordinar visita\n\n' +
+    '💬 Comandos:\n' +
+    'Escribe "inicio", "menu" o "volver" para regresar a este menú.\n' +
+    'Escribe "english" o "español / espanol" para cambiar de idioma.\n\n' +
+    `📞 Teléfono: ${PHONE}\n` +
+    `📘 Facebook: ${FB_LINK}`
   );
 }
 
@@ -296,19 +327,32 @@ function serviceName(service, lang) {
 }
 
 function servicePrompt(service, lang) {
-  const baseEN =
-    'Send everything in ONE message:\n• Name\n• Phone\n• City\n• Description\n\nExample:\n' +
-    `"Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"`;
-  const baseES =
-    'Envía TODO en UN solo mensaje:\n• Nombre\n• Teléfono\n• Municipio\n• Descripción\n\nEjemplo:\n' +
-    `"Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"`;
+  if (lang === 'en') {
+    return (
+      `✅ Selected: ${serviceName(service, lang)}\n\n` +
+      'Please send everything in ONE message:\n' +
+      '• 🧑‍🎓 Full name\n' +
+      '• 📞 Contact number (US/PR)\n' +
+      '• 📍 City / area / sector\n' +
+      '• 📝 Short description of the issue\n\n' +
+      'Example:\n' +
+      `"I'm Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"`
+    );
+  }
 
-  return lang === 'en'
-    ? `✅ Selected: ${serviceName(service, lang)}\n\n${baseEN}`
-    : `✅ Seleccionaste: ${serviceName(service, lang)}\n\n${baseES}`;
+  return (
+    `✅ Servicio seleccionado: ${serviceName(service, lang)}\n\n` +
+    'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
+    '• 🧑‍🎓 Nombre completo\n' +
+    '• 📞 Número de contacto (787/939 o EE.UU.)\n' +
+    '• 📍 Zona / municipio / sector\n' +
+    '• 📝 Descripción breve del problema\n\n' +
+    'Ejemplo:\n' +
+    `"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"`
+  );
 }
 
-// ✅ FIX: incluye Case ID siempre que exista
+// ✅ incluye Case ID
 function detailsThankYou(service, lang, details, caseId, priority, isMember) {
   const caseLine =
     caseId && caseId !== 'DP-PENDING'
@@ -317,7 +361,9 @@ function detailsThankYou(service, lang, details, caseId, priority, isMember) {
 
   const priorityLine =
     lang === 'en'
-      ? `Priority: ${priority || 'Normal'}\n`
+      ? `PrioritIf you’d like, I can also add the “Commands” line in Spanish as in your screenshot (with quotes and exact spacing).
+
+y: ${priority || 'Normal'}\n`
       : `Prioridad: ${priority || 'Normal'}\n`;
 
   const memberLine = isMember
@@ -478,7 +524,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
     // menú
     if (!bodyNorm || isMenuCommand) {
       await saveSession(from, { last_choice: null, awaiting_details: 0, details: null });
-      const msg = lang === 'en' ? '🔁 Returning to menu.\n\n' : '🔁 Regresando al menú.\n\n';
+      const msg = lang === 'en' ? '🔁 Returning to the main menu.\n\n' : '🔁 Regresando al menú principal.\n\n';
       return sendTwilioXML(res, msg + mainMenu(lang));
     }
 
