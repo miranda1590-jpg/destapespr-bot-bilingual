@@ -1,21 +1,10 @@
-// server.js - DestapesPR Bot 5 Pro 🇵🇷 (Bilingüe ES/EN)
-// ✅ Welcome after inactivity (12h)
-// ✅ "Hola/Hello/Hi" muestra menú
-// ✅ Captura datos en 1 mensaje (con ejemplo ES/EN)
-// ✅ SQLite sessions
-// ✅ Exporta lead a Google Sheets (Apps Script Web App)
-// ✅ Token va en el BODY (Apps Script compatible) + timeout 15s + retry
-//
-// ENV (Render):
-//   LEADS_WEBHOOK_URL   = https://script.google.com/macros/s/XXXX/exec
-//   LEADS_WEBHOOK_TOKEN = DESTAPESPR_TOKEN
+// server.js - DestapesPR Bot 5 Pro (bilingüe ES/EN) + Case ID + Admin WhatsApp Alerts
 
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
-import fetch from 'node-fetch';
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -25,31 +14,41 @@ app.use(morgan('dev'));
 const PORT = process.env.PORT || 10000;
 const TAG = 'DestapesPR Bot 5 Pro 🇵🇷';
 
+// =========================
+// Config
+// =========================
 const PHONE = '+1 787-922-0068';
 const FB_LINK = 'https://www.facebook.com/destapesPR/';
 
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000; // 48h
-const WELCOME_GAP_MS = 12 * 60 * 60 * 1000; // welcome again if idle 12h+
+const WELCOME_GAP_MS = 12 * 60 * 60 * 1000; // 12h sin escribir => bienvenida otra vez
 
+// Google Sheets webhook (Apps Script)
 const LEADS_WEBHOOK_URL = process.env.LEADS_WEBHOOK_URL || '';
 const LEADS_WEBHOOK_TOKEN = process.env.LEADS_WEBHOOK_TOKEN || '';
 
+// Admin alerts (WhatsApp via Twilio REST)
+const ADMIN_ALERTS_ENABLED = String(process.env.ADMIN_ALERTS_ENABLED || '0') === '1';
+const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
+const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
+const ADMIN_WHATSAPP_FROM = process.env.ADMIN_WHATSAPP_FROM || '';
+const ADMIN_WHATSAPP_TO = process.env.ADMIN_WHATSAPP_TO || '';
+
+console.log('TAG:', TAG);
 console.log('Node:', process.version);
 console.log('LEADS_WEBHOOK_URL set?', Boolean(LEADS_WEBHOOK_URL));
 console.log('LEADS_WEBHOOK_TOKEN set?', Boolean(LEADS_WEBHOOK_TOKEN));
+console.log('ADMIN_ALERTS_ENABLED?', ADMIN_ALERTS_ENABLED);
 
 // =========================
-// SQLite
+// SQLite: sesiones
 // =========================
 let db;
 
 async function initDB() {
   if (db) return db;
 
-  db = await open({
-    filename: './sessions.db',
-    driver: sqlite3.Database,
-  });
+  db = await open({ filename: './sessions.db', driver: sqlite3.Database });
 
   await db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
@@ -66,7 +65,7 @@ async function initDB() {
     );
   `);
 
-  // migrations
+  // Migraciones seguras
   const cols = await db.all(`PRAGMA table_info(sessions);`);
   const names = cols.map((c) => c.name);
 
@@ -76,7 +75,9 @@ async function initDB() {
   if (!names.includes('city')) await db.exec(`ALTER TABLE sessions ADD COLUMN city TEXT;`);
   if (!names.includes('first_seen')) await db.exec(`ALTER TABLE sessions ADD COLUMN first_seen INTEGER;`);
 
+  // Limpiar sesiones viejas
   await db.run('DELETE FROM sessions WHERE last_active < ?', Date.now() - SESSION_TTL_MS);
+
   return db;
 }
 
@@ -133,7 +134,7 @@ async function saveSession(from, patch = {}) {
 }
 
 // =========================
-// Utils
+// Utilidades
 // =========================
 function norm(str) {
   return String(str || '')
@@ -141,7 +142,7 @@ function norm(str) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
-    .replace(/[^\p{L}\p{N}\s]/gu, '');
+    .replace(/[^\p{L}\p{N}\s]/gu, ''); // quita puntuación rara
 }
 
 function titleCase(s) {
@@ -173,10 +174,10 @@ function extractLeadFields(detailsRaw) {
 
   let name = null;
   if (parts[0]) {
-    let p0 = parts[0];
-    p0 = p0.replace(/^(me llamo|soy|mi nombre es)\s+/i, '');
-    p0 = p0.replace(/^(i am|im|i'm|my name is)\s+/i, '');
-    p0 = p0.replace(/^["'`]+|["'`]+$/g, '');
+    let p0 = parts[0]
+      .replace(/^(me llamo|soy|mi nombre es)\s+/i, '')
+      .replace(/^(i am|im|i'm|my name is)\s+/i, '')
+      .replace(/^["'`]+|["'`]+$/g, '');
     if (norm(p0).length >= 3) name = titleCase(p0);
   }
 
@@ -194,11 +195,21 @@ function extractLeadFields(detailsRaw) {
   return { name, phone, city };
 }
 
+function isUrgent(bodyNorm) {
+  return ['urgente', 'emergencia', 'emergency', 'hoy', 'ahora', 'asap', 'ya', 'inundacion', 'inundación', 'se esta regando', 'flood']
+    .some((k) => bodyNorm.includes(norm(k)));
+}
+
+function isMembershipMention(bodyNorm) {
+  return ['membresia', 'membresía', 'membership', 'member', 'plan', 'soy cliente', 'tengo membresia', 'tengo membresía']
+    .some((k) => bodyNorm.includes(norm(k)));
+}
+
 // =========================
-// Language detection
+// Idioma
 // =========================
-const EN_HINTS = ['drain','unclog','clogged','leak','camera','inspection','heater','appointment','schedule','water','toilet','sink','hello','hi'];
-const ES_HINTS = ['destape','tapon','tapada','tapado','tapao','fuga','goteo','camara','cita','calentador','inodoro','fregadero','banera','buenas','hola'];
+const EN_HINTS = ['drain', 'unclog', 'clogged', 'leak', 'camera', 'inspection', 'heater', 'appointment', 'schedule', 'water', 'toilet', 'sink', 'hello', 'hi'];
+const ES_HINTS = ['destape', 'tapon', 'tapada', 'tapado', 'tapao', 'fuga', 'goteo', 'camara', 'cita', 'calentador', 'inodoro', 'fregadero', 'banera', 'hola', 'buenas'];
 
 function detectLanguage(bodyRaw, previousLang = 'es') {
   const txt = norm(bodyRaw);
@@ -206,8 +217,7 @@ function detectLanguage(bodyRaw, previousLang = 'es') {
   if (/\benglish\b/.test(txt) || /\bingles\b/.test(txt) || /\bingl[eé]s\b/.test(txt)) return 'en';
   if (/\bespanol\b/.test(txt) || /\bespa[ñn]ol\b/.test(txt) || /\bspanish\b/.test(txt)) return 'es';
 
-  let en = 0;
-  let es = 0;
+  let en = 0, es = 0;
   for (const w of EN_HINTS) if (txt.includes(w)) en++;
   for (const w of ES_HINTS) if (txt.includes(w)) es++;
 
@@ -217,26 +227,20 @@ function detectLanguage(bodyRaw, previousLang = 'es') {
 }
 
 // =========================
-// Service matching
+// Servicios
 // =========================
 const SERVICE_KEYS = ['destape', 'fuga', 'camara', 'calentador', 'otro', 'cita'];
-
 const SERVICE_KEYWORDS = {
-  destape: [
-    'destape','destapar','tapon','tapada','tapado','tapao','obstruccion','drenaje','desague',
-    'fregadero','lavaplatos','inodoro','toilet','ducha','lavamanos','banera','bañera',
-    'principal','linea principal','drain','unclog','clogged','sewer','tubo','bajante','bajada'
-  ],
-  fuga: ['fuga','goteo','goteando','salidero','humedad','filtracion','leak','leaking','moisture'],
-  camara: ['camara','cámara','video inspeccion','inspeccion','inspection','camera inspection','sewer camera'],
-  calentador: ['calentador','heater','water heater','boiler','gas','electrico','eléctrico','electric','hot water','agua caliente'],
-  otro: ['otro','servicio','consulta','presupuesto','cotizacion','cotización','other','plumbing','problem','presion','no tengo agua','cisterna','bomba'],
-  cita: ['cita','appointment','schedule','agendar','reservar'],
+  destape: ['destape', 'destapar', 'tapon', 'tapada', 'tapado', 'tapao', 'obstruccion', 'drenaje', 'desague', 'fregadero', 'inodoro', 'toilet', 'ducha', 'lavamanos', 'banera', 'principal', 'linea principal', 'drain', 'unclog', 'clogged', 'sewer'],
+  fuga: ['fuga', 'goteo', 'salidero', 'humedad', 'filtracion', 'leak', 'leaking', 'moisture'],
+  camara: ['camara', 'cámara', 'video inspeccion', 'inspeccion', 'inspection', 'camera inspection', 'sewer camera'],
+  calentador: ['calentador', 'heater', 'water heater', 'gas', 'electrico', 'eléctrico', 'electric', 'hot water', 'agua caliente'],
+  otro: ['otro', 'servicio', 'consulta', 'presupuesto', 'cotizacion', 'cotización', 'other', 'plumbing', 'problem'],
+  cita: ['cita', 'appointment', 'schedule', 'agendar', 'reservar'],
 };
 
 function matchService(bodyRaw) {
   const txt = norm(bodyRaw);
-
   const mapNums = { '1': 'destape', '2': 'fuga', '3': 'camara', '4': 'calentador', '5': 'otro', '6': 'cita' };
   if (mapNums[txt]) return mapNums[txt];
 
@@ -246,64 +250,37 @@ function matchService(bodyRaw) {
   return null;
 }
 
-function wantsPrice(bodyNorm) {
-  return ['precio','precios','cuanto','costo','costos','tarifa','valor','estimate','estimado','quote','cotizacion']
-    .some((k) => bodyNorm.includes(norm(k)));
-}
-
-function isUrgent(bodyNorm) {
-  return ['urgente','emergencia','emergency','hoy','ahora','asap','ya','inundacion','se esta regando','flood']
-    .some((k) => bodyNorm.includes(norm(k)));
-}
-
 // =========================
-// Text / Menus
+// Textos UI
 // =========================
 function mainMenu(lang) {
   if (lang === 'en') {
     return (
       '👋 Welcome to DestapesPR.\n\n' +
-      'Please choose a number or type the service you need:\n\n' +
-      '1️⃣ Drain cleaning (clogged drains/pipes)\n' +
-      '2️⃣ Leak (water leaks / dampness)\n' +
-      '3️⃣ Camera inspection (video)\n' +
-      '4️⃣ Water heater (gas or electric)\n' +
-      '5️⃣ Other plumbing service\n' +
-      '6️⃣ Appointment / schedule a visit\n\n' +
-      '💬 Commands:\n' +
-      'Type "start", "menu" or "back" to return to this menu.\n' +
-      'Type "english" or "español / espanol" to change language.\n\n' +
-      `📞 Phone: ${PHONE}\n` +
-      `📘 Facebook: ${FB_LINK}`
+      'Choose a number or type the service you need:\n\n' +
+      '1️⃣ Drain cleaning\n2️⃣ Leak\n3️⃣ Camera inspection\n4️⃣ Water heater\n5️⃣ Other\n6️⃣ Appointment\n\n' +
+      '💬 Commands: "start", "menu", "back". Language: "english" / "español".\n\n' +
+      `📞 ${PHONE}\n📘 ${FB_LINK}`
     );
   }
-
   return (
     '👋 Bienvenido a DestapesPR.\n\n' +
-    'Por favor, selecciona un número o escribe el servicio que necesitas:\n\n' +
-    '1️⃣ Destape (drenajes o tuberías tapadas)\n' +
-    '2️⃣ Fuga de agua (goteos / filtraciones)\n' +
-    '3️⃣ Inspección con cámara (video)\n' +
-    '4️⃣ Calentador de agua (gas o eléctrico)\n' +
-    '5️⃣ Otro servicio de plomería\n' +
-    '6️⃣ Cita / coordinar visita\n\n' +
-    '💬 Comandos:\n' +
-    'Escribe "inicio", "menu" o "volver" para regresar a este menú.\n' +
-    'Escribe "english" o "español / espanol" para cambiar de idioma.\n\n' +
-    `📞 Teléfono: ${PHONE}\n` +
-    `📘 Facebook: ${FB_LINK}`
+    'Selecciona un número o escribe el servicio:\n\n' +
+    '1️⃣ Destape\n2️⃣ Fuga\n3️⃣ Cámara\n4️⃣ Calentador\n5️⃣ Otro\n6️⃣ Cita\n\n' +
+    '💬 Comandos: "inicio", "menu", "volver". Idioma: "english" / "español".\n\n' +
+    `📞 ${PHONE}\n📘 ${FB_LINK}`
   );
 }
 
 function welcomeText({ lang, name, returning }) {
   if (lang === 'en') {
-    if (returning && name) return `👋 Hi ${name}! Welcome back to DestapesPR.\n\n`;
-    if (returning) return `👋 Welcome back to DestapesPR.\n\n`;
-    return `👋 Welcome to DestapesPR.\n\n`;
+    if (returning && name) return `👋 Hi ${name}! Welcome back.\n\n`;
+    if (returning) return `👋 Welcome back.\n\n`;
+    return `👋 Welcome.\n\n`;
   }
-  if (returning && name) return `👋 ¡Hola ${name}! Qué bueno verte de nuevo en DestapesPR.\n\n`;
-  if (returning) return `👋 ¡Bienvenido de nuevo a DestapesPR!\n\n`;
-  return `👋 ¡Bienvenido a DestapesPR!\n\n`;
+  if (returning && name) return `👋 ¡Hola ${name}! Qué bueno verte de nuevo.\n\n`;
+  if (returning) return `👋 ¡Bienvenido de nuevo!\n\n`;
+  return `👋 ¡Bienvenido!\n\n`;
 }
 
 function serviceName(service, lang) {
@@ -312,222 +289,131 @@ function serviceName(service, lang) {
     fuga: { es: 'Fuga de agua', en: 'Water leak' },
     camara: { es: 'Inspección con cámara', en: 'Camera inspection' },
     calentador: { es: 'Calentador de agua', en: 'Water heater' },
-    otro: { es: 'Otro servicio de plomería', en: 'Other plumbing service' },
+    otro: { es: 'Otro servicio', en: 'Other service' },
     cita: { es: 'Cita / coordinar visita', en: 'Appointment' },
   };
   return (names[service] || names.otro)[lang === 'en' ? 'en' : 'es'];
 }
 
 function servicePrompt(service, lang) {
-  const commonEN =
-    'Please send everything in a single message:\n' +
-    '• 🧑‍🎓 Full name\n' +
-    '• 📞 Contact number (US/PR)\n' +
-    '• 📍 City / area / sector\n';
-  const commonES =
-    'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
-    '• 🧑‍🎓 Nombre completo\n' +
-    '• 📞 Número de contacto (787/939 o EE.UU.)\n' +
-    '• 📍 Zona / municipio / sector\n';
-
-  if (service === 'destape') {
-    return lang === 'en'
-      ? '✅ Selected service: Drain cleaning\n\n' +
-          commonEN +
-          '• 📝 Short description of the issue (sink, toilet, main line, etc.)\n\n' +
-          'Example:\n' +
-          `"I'm Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"\n\n` +
-          'We will review your information and contact you as soon as possible.'
-      : '✅ Servicio seleccionado: Destape\n\n' +
-          commonES +
-          '• 📝 Descripción breve del problema (fregadero, inodoro, línea principal, etc.)\n\n' +
-          'Ejemplo:\n' +
-          `"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"\n\n` +
-          'Revisaremos tu información y nos comunicaremos lo antes posible.';
-  }
-
-  if (service === 'fuga') {
-    return lang === 'en'
-      ? '✅ Selected service: Water leak\n\n' +
-          commonEN +
-          '• 📝 Where do you see the leak or dampness? (wall, ceiling, floor, etc.)\n\n' +
-          'Example:\n' +
-          `"I'm Ana Rivera, 939-555-9999, Caguas, water leak in the bathroom ceiling"\n\n` +
-          'We will review your information and contact you as soon as possible.'
-      : '✅ Servicio seleccionado: Fuga de agua\n\n' +
-          commonES +
-          '• 📝 Dónde notas la fuga o la humedad (pared, techo, piso, etc.)\n\n' +
-          'Ejemplo:\n' +
-          `"Me llamo Ana Rivera, 939-555-9999, Caguas, fuga en el techo del baño"\n\n` +
-          'Revisaremos tu información y nos comunicaremos lo antes posible.';
-  }
-
-  if (service === 'camara') {
-    return lang === 'en'
-      ? '✅ Selected service: Camera inspection\n\n' +
-          commonEN +
-          '• 📝 Area to inspect (bathroom, kitchen, main line, etc.)\n\n' +
-          'Example:\n' +
-          `"I'm Ana Rivera, 939-555-9999, Caguas, camera inspection in main sewer line"\n\n` +
-          'We will review your information and contact you as soon as possible.'
-      : '✅ Servicio seleccionado: Inspección con cámara\n\n' +
-          commonES +
-          '• 📝 Área a inspeccionar (baño, cocina, línea principal, etc.)\n\n' +
-          'Ejemplo:\n' +
-          `"Me llamo Ana Rivera, 939-555-9999, Caguas, inspección con cámara en la línea principal"\n\n` +
-          'Revisaremos tu información y nos comunicaremos lo antes posible.';
-  }
-
-  if (service === 'calentador') {
-    return lang === 'en'
-      ? '✅ Selected service: Water heater (gas or electric)\n\n' +
-          commonEN +
-          '• 📝 Type of heater and problem (gas/electric, not heating, leaking, etc.)\n\n' +
-          'Example:\n' +
-          `"I'm Ana Rivera, 939-555-9999, Caguas, electric water heater not heating"\n\n` +
-          'We will review your information and contact you as soon as possible.'
-      : '✅ Servicio seleccionado: Calentador de agua\n\n' +
-          commonES +
-          '• 📝 Tipo de calentador y problema (gas/eléctrico, no calienta, fuga, etc.)\n\n' +
-          'Ejemplo:\n' +
-          `"Me llamo Ana Rivera, 939-555-9999, Caguas, calentador eléctrico no calienta"\n\n` +
-          'Revisaremos tu información y nos comunicaremos lo antes posible.';
-  }
-
-  if (service === 'cita') {
-    return lang === 'en'
-      ? '✅ Selected: Schedule an appointment\n\n' +
-          commonEN +
-          '• 📝 Preferred days and time range\n' +
-          '• 📝 Short description of the plumbing issue\n\n' +
-          'Example:\n' +
-          `"I'm Ana Rivera, 939-555-9999, Caguas, prefer Monday–Wednesday 10am–1pm, kitchen sink clogged"\n\n` +
-          'We will review your information and contact you as soon as possible.'
-      : '✅ Servicio seleccionado: Cita / coordinar visita\n\n' +
-          commonES +
-          '• 📝 Días y horario aproximado de disponibilidad\n' +
-          '• 📝 Descripción breve del problema de plomería\n\n' +
-          'Ejemplo:\n' +
-          `"Me llamo Ana Rivera, 939-555-9999, Caguas, prefiero lunes a miércoles 10am–1pm, fregadero de cocina tapado"\n\n` +
-          'Revisaremos tu información y nos comunicaremos lo antes posible.';
-  }
+  const baseEN =
+    'Send everything in ONE message:\n• Name\n• Phone\n• City\n• Description\n\nExample:\n' +
+    `"Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"`;
+  const baseES =
+    'Envía TODO en UN solo mensaje:\n• Nombre\n• Teléfono\n• Municipio\n• Descripción\n\nEjemplo:\n' +
+    `"Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"`;
 
   return lang === 'en'
-    ? '✅ Selected service: Other plumbing service\n\n' +
-        commonEN +
-        '• 📝 Short description of the service you need\n\n' +
-        'Example:\n' +
-        `"I'm Ana Rivera, 939-555-9999, Caguas, need estimate for bathroom remodeling"\n\n` +
-        'We will review your information and contact you as soon as possible.'
-    : '✅ Servicio seleccionado: Otro servicio de plomería\n\n' +
-        commonES +
-        '• 📝 Descripción breve del servicio que necesitas\n\n' +
-        'Ejemplo:\n' +
-        `"Me llamo Ana Rivera, 939-555-9999, Caguas, necesito estimado para remodelación de baño"\n\n` +
-        'Revisaremos tu información y nos comunicaremos lo antes posible.';
+    ? `✅ Selected: ${serviceName(service, lang)}\n\n${baseEN}`
+    : `✅ Seleccionaste: ${serviceName(service, lang)}\n\n${baseES}`;
 }
 
-function detailsThankYou(service, lang, details, session) {
-  const sName = session?.name ? ` ${session.name}` : '';
-  const sCity = session?.city ? ` (${session.city})` : '';
-  const sPhone = session?.phone ? ` • ${session.phone}` : '';
+function detailsThankYou(service, lang, details, caseId, priority, isMember) {
+  const memberLine = isMember
+    ? (lang === 'en' ? '⭐ Membership: YES\n' : '⭐ Membresía: SÍ\n')
+    : '';
+
+  const prLine = lang === 'en' ? `Priority: ${priority || 'Normal'}\n` : `Prioridad: ${priority || 'Normal'}\n`;
+  const caseLine = lang === 'en' ? `Case ID: ${caseId}\n` : `Caso: ${caseId}\n`;
 
   return lang === 'en'
-    ? '✅ Thank you, we saved your information.\n\n' +
-        `Service: ${serviceName(service, lang)}\n` +
-        `Contact:${sName}${sCity}${sPhone}\n\n` +
-        `Details:\n"${details}"\n\n` +
-        'We will review your information and contact you as soon as possible.\n\n' +
-        'To return to the menu, type "menu" or "start".'
-    : '✅ Gracias, hemos guardado tu información.\n\n' +
-        `Servicio: ${serviceName(service, lang)}\n` +
-        `Contacto:${sName}${sCity}${sPhone}\n\n` +
-        `Detalles:\n"${details}"\n\n` +
-        'Revisaremos tu información y nos comunicaremos lo antes posible.\n\n' +
-        'Para regresar al menú escribe "menu", "inicio" o "volver".';
+    ? `✅ Thank you! We saved your info.\n\n${caseLine}${prLine}${memberLine}Service: ${serviceName(service, lang)}\n\nDetails:\n"${details}"\n\nType "menu" for options.`
+    : `✅ ¡Gracias! Guardamos tu información.\n\n${caseLine}${prLine}${memberLine}Servicio: ${serviceName(service, lang)}\n\nDetalles:\n"${details}"\n\nEscribe "menu" para opciones.`;
 }
 
 // =========================
-// Twilio XML
+// Twilio XML responder
 // =========================
 function sendTwilioXML(res, text) {
-  const safe = String(text)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${safe}</Message></Response>`;
+  const safe = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   res.set('Content-Type', 'application/xml');
-  return res.send(xml);
+  return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${safe}</Message></Response>`);
 }
 
 // =========================
-// Google Sheets Webhook (token in BODY) + timeout 15s + retry
+// Admin WhatsApp alert (Twilio REST)
+// =========================
+async function sendAdminAlert(message) {
+  if (!ADMIN_ALERTS_ENABLED) return;
+  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !ADMIN_WHATSAPP_FROM || !ADMIN_WHATSAPP_TO) {
+    console.log('ADMIN ALERT -> missing env vars');
+    return;
+  }
+
+  const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
+  const body = new URLSearchParams({
+    From: ADMIN_WHATSAPP_FROM,
+    To: ADMIN_WHATSAPP_TO,
+    Body: message,
+  });
+
+  const auth = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64');
+
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const resp = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${auth}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body,
+      signal: controller.signal,
+    });
+    clearTimeout(t);
+    console.log('ADMIN ALERT ->', resp.status);
+  } catch (e) {
+    clearTimeout(t);
+    console.log('ADMIN ALERT ERROR ->', String(e?.message || e));
+  }
+}
+
+// =========================
+// Post lead to Apps Script (token in BODY)
 // =========================
 async function postLeadToWebhook(payload) {
-  if (!LEADS_WEBHOOK_URL) {
-    console.log('LEAD POST -> skipped (LEADS_WEBHOOK_URL empty)');
-    return { ok: false, skipped: true };
-  }
+  if (!LEADS_WEBHOOK_URL) return { ok: false, error: 'LEADS_WEBHOOK_URL empty' };
 
-  const tryOnce = async (attempt) => {
-    console.log(`LEAD POST -> attempt ${attempt}`, {
-      service: payload?.service,
-      name: payload?.name || null,
+  const controller = new AbortController();
+  const t = setTimeout(() => controller.abort(), 6000);
+
+  try {
+    console.log('LEAD POST -> sending', { service: payload.service, name: payload.name });
+
+    const resp = await fetch(LEADS_WEBHOOK_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: LEADS_WEBHOOK_TOKEN, ...payload }),
+      signal: controller.signal,
     });
 
-    const controller = new AbortController();
-    const t = setTimeout(() => controller.abort(), 15000);
+    clearTimeout(t);
 
-    try {
-      const res = await fetch(LEADS_WEBHOOK_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        // ✅ token va en el BODY para evitar problemas con Authorization header en Apps Script
-        body: JSON.stringify({
-          token: LEADS_WEBHOOK_TOKEN || '',
-          ...payload,
-        }),
-        signal: controller.signal,
-      });
+    const txt = await resp.text().catch(() => '');
+    let json = null;
+    try { json = JSON.parse(txt); } catch { json = null; }
 
-      clearTimeout(t);
+    console.log('LEAD POST RESULT ->', resp.status);
+    console.log('LEAD POST BODY ->', txt.slice(0, 300));
 
-      const txt = await res.text().catch(() => '');
-      console.log('LEAD POST RESULT ->', res.status);
-      console.log('LEAD POST BODY ->', txt.slice(0, 250));
-
-      return { ok: res.ok, status: res.status, body: txt };
-    } catch (e) {
-      clearTimeout(t);
-      console.log('LEAD POST ERROR ->', String(e?.message || e));
-      return { ok: false, error: String(e?.message || e) };
-    }
-  };
-
-  const r1 = await tryOnce(1);
-  if (r1.ok) return r1;
-
-  if ((r1.error || '').toLowerCase().includes('aborted')) {
-    await new Promise((r) => setTimeout(r, 600));
-    return await tryOnce(2);
+    return { status: resp.status, ok: resp.ok, text: txt, json };
+  } catch (e) {
+    clearTimeout(t);
+    console.log('LEAD POST ERROR ->', String(e?.message || e));
+    return { ok: false, error: String(e?.message || e) };
   }
-
-  return r1;
 }
 
 // =========================
-// Routes
+// Rutas
 // =========================
-app.get('/__version', (req, res) => {
-  res.json({ ok: true, tag: TAG, tz: 'America/Puerto_Rico' });
-});
-
-app.get('/', (req, res) => {
-  res.send('DestapesPR WhatsApp bot activo ✅');
-});
+app.get('/__version', (req, res) => res.json({ ok: true, tag: TAG, tz: 'America/Puerto_Rico' }));
+app.get('/', (req, res) => res.send('DestapesPR WhatsApp bot activo ✅'));
 
 // =========================
-// WhatsApp webhook
+// Webhook principal
 // =========================
 app.post('/webhook/whatsapp', async (req, res) => {
   try {
@@ -535,61 +421,49 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
     const from = (req.body.From || req.body.from || req.body.WaId || '').toString();
     const bodyRaw = (req.body.Body || req.body.body || '').toString();
-
     if (!from) return sendTwilioXML(res, 'Missing sender.');
 
     let session = await getSession(from);
     const isFirstTime = !session;
-
     if (!session) session = await saveSession(from, { lang: 'es', first_seen: Date.now() });
 
+    // idioma
     const newLang = detectLanguage(bodyRaw, session.lang || 'es');
     if (newLang !== session.lang) session = await saveSession(from, { lang: newLang });
 
     const lang = session.lang || 'es';
     const bodyNorm = norm(bodyRaw);
 
+    // bienvenida solo si primera vez o gap
     const idleMs = session.last_active ? Date.now() - Number(session.last_active) : Infinity;
     const isReturningAfterGap = !isFirstTime && idleMs > WELCOME_GAP_MS;
 
-    const isMenuCommand = [
-      'inicio','menu','volver','start','back',
-      'hola','hello','hi','buenas','buenos dias','buenas tardes','buenas noches'
-    ].includes(bodyNorm);
+    const isMenuCommand = ['inicio', 'menu', 'volver', 'start', 'back', 'hola', 'hello', 'hi', 'buenas'].includes(bodyNorm);
 
     const isLanguageCommand =
-      /\benglish\b/.test(bodyNorm) ||
-      /\bingles\b/.test(bodyNorm) ||
-      /\bingl[eé]s\b/.test(bodyNorm) ||
-      /\bespanol\b/.test(bodyNorm) ||
-      /\bespa[ñn]ol\b/.test(bodyNorm) ||
-      /\bspanish\b/.test(bodyNorm);
+      /\benglish\b/.test(bodyNorm) || /\bingles\b/.test(bodyNorm) || /\bingl[eé]s\b/.test(bodyNorm) ||
+      /\bespanol\b/.test(bodyNorm) || /\bespa[ñn]ol\b/.test(bodyNorm) || /\bspanish\b/.test(bodyNorm);
 
-    // 1) Welcome only first time or after long gap
     if (isFirstTime || isReturningAfterGap) {
       await saveSession(from, { last_choice: null, awaiting_details: 0, details: null });
-      const welcome = welcomeText({ lang, name: session.name, returning: !isFirstTime });
-      return sendTwilioXML(res, welcome + mainMenu(lang));
+      return sendTwilioXML(res, welcomeText({ lang, name: session.name, returning: !isFirstTime }) + mainMenu(lang));
     }
 
-    // 2) Menu command -> show menu (no extra welcome)
+    // menú
     if (!bodyNorm || isMenuCommand) {
       await saveSession(from, { last_choice: null, awaiting_details: 0, details: null });
-      const reply =
-        lang === 'en'
-          ? '🔁 Returning to the main menu.\n\n' + mainMenu(lang)
-          : '🔁 Regresando al menú principal.\n\n' + mainMenu(lang);
-      return sendTwilioXML(res, reply);
+      const msg = lang === 'en' ? '🔁 Returning to menu.\n\n' : '🔁 Regresando al menú.\n\n';
+      return sendTwilioXML(res, msg + mainMenu(lang));
     }
 
-    // 3) Language command
+    // cambio de idioma
     if (isLanguageCommand) {
-      const confirm = newLang === 'en' ? '✅ Language set to English.\n\n' : '✅ Idioma establecido a español.\n\n';
       await saveSession(from, { lang: newLang });
+      const confirm = newLang === 'en' ? '✅ Language set to English.\n\n' : '✅ Idioma establecido a español.\n\n';
       return sendTwilioXML(res, confirm + mainMenu(newLang));
     }
 
-    // 4) Awaiting details -> save + export to Sheets (async)
+    // si espera detalles: guarda + manda a Sheets + responde con Case ID + alerta interna
     if (session.awaiting_details && session.last_choice) {
       const { name, phone, city } = extractLeadFields(bodyRaw);
 
@@ -601,59 +475,66 @@ app.post('/webhook/whatsapp', async (req, res) => {
         ...(city ? { city } : {}),
       });
 
-      // ✅ Fire-and-forget so Twilio response is not delayed
-      postLeadToWebhook({
+      const payload = {
         ts: new Date().toISOString(),
         from_number: from,
         lang: session.lang,
         service: session.last_choice,
         service_label: serviceName(session.last_choice, session.lang),
-        name: session.name || null,
-        phone: session.phone || null,
-        city: session.city || null,
+        name: session.name || '',
+        phone: session.phone || '',
+        city: session.city || '',
         details: bodyRaw,
-      }).catch(() => {});
+      };
 
-      return sendTwilioXML(res, detailsThankYou(session.last_choice, lang, bodyRaw, session));
+      const leadRes = await postLeadToWebhook(payload);
+      const caseId = leadRes?.json?.case_id || 'DP-PENDING';
+      const priority = leadRes?.json?.priority || (isUrgent(bodyNorm) ? 'Alta' : 'Normal');
+      const isMember = Boolean(leadRes?.json?.is_member) || isMembershipMention(bodyNorm);
+
+      // ✅ notificación interna (WhatsApp)
+      const alertText =
+        `🧾 Nuevo caso ${caseId}\n` +
+        `🔧 Servicio: ${payload.service_label}\n` +
+        `🔥 Prioridad: ${priority}\n` +
+        `⭐ Membresía: ${isMember ? 'YES' : 'NO'}\n` +
+        `👤 Cliente: ${payload.name} (${payload.city})\n` +
+        `📞 Tel: ${payload.phone}\n` +
+        `📝 ${String(payload.details).slice(0, 220)}`;
+
+      await sendAdminAlert(alertText);
+
+      // ✅ respuesta al cliente con Case ID
+      return sendTwilioXML(res, detailsThankYou(session.last_choice, lang, bodyRaw, caseId, priority, isMember));
     }
 
-    // 5) Smart fallback: urgent -> appointment
+    // urgencia => empujar a cita
     if (isUrgent(bodyNorm)) {
       await saveSession(from, { last_choice: 'cita', awaiting_details: 1, details: null });
       return sendTwilioXML(res, servicePrompt('cita', lang));
     }
 
-    // 6) Smart fallback: price -> ask service
-    if (wantsPrice(bodyNorm)) {
-      const msg =
-        lang === 'en'
-          ? '💲 Sure — to give you the right price, tell us which service you need (choose 1–6):\n\n'
-          : '💲 Claro — para darte el precio correcto, dime qué servicio necesitas (elige 1–6):\n\n';
-      return sendTwilioXML(res, msg + mainMenu(lang));
-    }
-
-    // 7) Match service
+    // detectar servicio
     const svc = matchService(bodyRaw);
     if (svc) {
       await saveSession(from, { last_choice: svc, awaiting_details: 1, details: null });
       return sendTwilioXML(res, servicePrompt(svc, lang));
     }
 
-    // 8) Fallback
-    const fallback =
-      lang === 'en'
-        ? "I didn't understand your message.\n\n" + mainMenu(lang)
-        : 'No entendí tu mensaje.\n\n' + mainMenu(lang);
+    // fallback
+    const fallback = lang === 'en'
+      ? "I didn't understand.\n\n" + mainMenu(lang)
+      : 'No entendí.\n\n' + mainMenu(lang);
 
     return sendTwilioXML(res, fallback);
   } catch (err) {
     console.log('WEBHOOK ERROR ->', String(err?.message || err));
-    return sendTwilioXML(res, 'Temporary error. Please type "menu" / "inicio" and try again.');
+    return sendTwilioXML(res, 'Temporary error. Type "menu" / "inicio".');
   }
 });
 
 // =========================
-// Start
+// Arrancar servidor
 // =========================
 app.listen(PORT, () => {
   console.log(`💬 DestapesPR bot escuchando en http://localhost:${PORT}`);
