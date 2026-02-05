@@ -5,14 +5,7 @@
 // ✅ Guarda sesión en SQLite (48h TTL)
 // ✅ Exporta lead a Google Sheets (Apps Script Web App) con timeout 6s
 // ✅ Notificaciones internas WhatsApp (Twilio REST) opcional
-// ENV (Render):
-//   LEADS_WEBHOOK_URL = https://script.google.com/macros/s/XXXX/exec
-//   LEADS_WEBHOOK_TOKEN = DESTAPESPR_TOKEN
-//   ADMIN_ALERTS_ENABLED = 1
-//   TWILIO_ACCOUNT_SID = ACxxxx
-//   TWILIO_AUTH_TOKEN = xxxx
-//   ADMIN_WHATSAPP_FROM = whatsapp:+14155238886 (o tu sender)
-//   ADMIN_WHATSAPP_TO = whatsapp:+1787XXXXXXX
+// ✅ Calentadores incluye SOLAR (menu + keywords + prompt)
 
 import 'dotenv/config';
 import express from 'express';
@@ -248,7 +241,28 @@ const SERVICE_KEYWORDS = {
   destape: ['destape', 'destapar', 'tapon', 'tapada', 'tapado', 'tapao', 'obstruccion', 'drenaje', 'desague', 'fregadero', 'inodoro', 'toilet', 'ducha', 'lavamanos', 'banera', 'principal', 'linea principal', 'drain', 'unclog', 'clogged', 'sewer'],
   fuga: ['fuga', 'goteo', 'salidero', 'humedad', 'filtracion', 'leak', 'leaking', 'moisture'],
   camara: ['camara', 'cámara', 'video inspeccion', 'inspeccion', 'inspection', 'camera inspection', 'sewer camera'],
-  calentador: ['calentador', 'heater', 'water heater', 'gas', 'electrico', 'eléctrico', 'electric', 'hot water', 'agua caliente'],
+  calentador: [
+    'calentador',
+    'heater',
+    'water heater',
+    'boiler',
+    'gas',
+    'electrico',
+    'eléctrico',
+    'electric',
+    'hot water',
+    'agua caliente',
+    // ✅ SOLAR
+    'solar',
+    'calentador solar',
+    'placa solar',
+    'placas solares',
+    'panel solar',
+    'paneles solares',
+    'sistema solar',
+    'solar water heater',
+    'solar heater',
+  ],
   otro: ['otro', 'servicio', 'consulta', 'presupuesto', 'cotizacion', 'cotización', 'other', 'plumbing', 'problem'],
   cita: ['cita', 'appointment', 'schedule', 'agendar', 'reservar'],
 };
@@ -265,7 +279,7 @@ function matchService(bodyRaw) {
 }
 
 // =========================
-// Menús (ESTILO NUEVO)
+// Menús (ESTILO NUEVO) + Calentador incluye SOLAR
 // =========================
 function mainMenu(lang) {
   if (lang === 'en') {
@@ -275,7 +289,7 @@ function mainMenu(lang) {
       '1️⃣ Drain cleaning (clogged drains/pipes)\n' +
       '2️⃣ Water leak (drips / moisture)\n' +
       '3️⃣ Camera inspection (video)\n' +
-      '4️⃣ Water heater (gas or electric)\n' +
+      '4️⃣ Water heater (gas, electric or solar)\n' +
       '5️⃣ Other plumbing service\n' +
       '6️⃣ Appointment / schedule a visit\n\n' +
       '💬 Commands:\n' +
@@ -292,7 +306,7 @@ function mainMenu(lang) {
     '1️⃣ Destape (drenajes o tuberías tapadas)\n' +
     '2️⃣ Fuga de agua (goteos / filtraciones)\n' +
     '3️⃣ Inspección con cámara (video)\n' +
-    '4️⃣ Calentador de agua (gas o eléctrico)\n' +
+    '4️⃣ Calentador de agua (gas, eléctrico o solar)\n' +
     '5️⃣ Otro servicio de plomería\n' +
     '6️⃣ Cita / coordinar visita\n\n' +
     '💬 Comandos:\n' +
@@ -319,7 +333,7 @@ function serviceName(service, lang) {
     destape: { es: 'Destape', en: 'Drain cleaning' },
     fuga: { es: 'Fuga de agua', en: 'Water leak' },
     camara: { es: 'Inspección con cámara', en: 'Camera inspection' },
-    calentador: { es: 'Calentador de agua', en: 'Water heater' },
+    calentador: { es: 'Calentador de agua (gas/eléctrico/solar)', en: 'Water heater (gas/electric/solar)' },
     otro: { es: 'Otro servicio', en: 'Other service' },
     cita: { es: 'Cita / coordinar visita', en: 'Appointment' },
   };
@@ -327,6 +341,35 @@ function serviceName(service, lang) {
 }
 
 function servicePrompt(service, lang) {
+  // ✅ Prompt especial para calentador (incluye solar)
+  if (service === 'calentador') {
+    if (lang === 'en') {
+      return (
+        '✅ Selected service: Water heater (gas, electric or solar)\n\n' +
+        'Please send everything in a single message:\n' +
+        '• 🧑‍🎓 Full name\n' +
+        '• 📞 Contact number (US/PR)\n' +
+        '• 📍 City / area / sector\n' +
+        '• 📝 Type (gas/electric/solar) + problem (no hot water, leaking, etc.)\n\n' +
+        'Example:\n' +
+        `"I'm Ana Rivera, 939-555-9999, Caguas, SOLAR water heater not heating"\n\n` +
+        'We will review your information and contact you as soon as possible.'
+      );
+    }
+    return (
+      '✅ Servicio seleccionado: Calentador de agua (gas, eléctrico o solar)\n\n' +
+      'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
+      '• 🧑‍🎓 Nombre completo\n' +
+      '• 📞 Número de contacto (787/939 o EE.UU.)\n' +
+      '• 📍 Zona / municipio / sector\n' +
+      '• 📝 Tipo (gas/eléctrico/solar) + problema (no calienta, fuga, etc.)\n\n' +
+      'Ejemplo:\n' +
+      `"Me llamo Ana Rivera, 939-555-9999, Caguas, calentador SOLAR no calienta"\n\n` +
+      'Revisaremos tu información y nos comunicaremos lo antes posible.'
+    );
+  }
+
+  // Prompt genérico (para los demás servicios)
   if (lang === 'en') {
     return (
       `✅ Selected: ${serviceName(service, lang)}\n\n` +
@@ -339,7 +382,6 @@ function servicePrompt(service, lang) {
       `"I'm Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"`
     );
   }
-
   return (
     `✅ Servicio seleccionado: ${serviceName(service, lang)}\n\n` +
     'Vamos a coordinar. Por favor envía todo en un solo mensaje:\n' +
@@ -361,9 +403,7 @@ function detailsThankYou(service, lang, details, caseId, priority, isMember) {
 
   const priorityLine =
     lang === 'en'
-      ? `PrioritIf you’d like, I can also add the “Commands” line in Spanish as in your screenshot (with quotes and exact spacing).
-
-y: ${priority || 'Normal'}\n`
+      ? `Priority: ${priority || 'Normal'}\n`
       : `Prioridad: ${priority || 'Normal'}\n`;
 
   const memberLine = isMember
@@ -397,7 +437,7 @@ y: ${priority || 'Normal'}\n`
 // Twilio XML responder
 // =========================
 function sendTwilioXML(res, text) {
-  const safe = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const safe = String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&lt;');
   res.set('Content-Type', 'application/xml');
   return res.send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${safe}</Message></Response>`);
 }
