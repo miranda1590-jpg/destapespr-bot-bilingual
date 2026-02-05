@@ -142,7 +142,7 @@ function norm(str) {
     .toLowerCase()
     .normalize('NFD')
     .replace(/\p{Diacritic}/gu, '')
-    .replace(/[^\p{L}\p{N}\s]/gu, ''); // quita puntuación rara
+    .replace(/[^\p{L}\p{N}\s]/gu, '');
 }
 
 function titleCase(s) {
@@ -308,17 +308,43 @@ function servicePrompt(service, lang) {
     : `✅ Seleccionaste: ${serviceName(service, lang)}\n\n${baseES}`;
 }
 
+// ✅ FIX: incluye Case ID siempre que exista
 function detailsThankYou(service, lang, details, caseId, priority, isMember) {
+  const caseLine =
+    caseId && caseId !== 'DP-PENDING'
+      ? (lang === 'en' ? `🧾 Case ID: ${caseId}\n` : `🧾 Número de caso: ${caseId}\n`)
+      : '';
+
+  const priorityLine =
+    lang === 'en'
+      ? `Priority: ${priority || 'Normal'}\n`
+      : `Prioridad: ${priority || 'Normal'}\n`;
+
   const memberLine = isMember
     ? (lang === 'en' ? '⭐ Membership: YES\n' : '⭐ Membresía: SÍ\n')
     : '';
 
-  const prLine = lang === 'en' ? `Priority: ${priority || 'Normal'}\n` : `Prioridad: ${priority || 'Normal'}\n`;
-  const caseLine = lang === 'en' ? `Case ID: ${caseId}\n` : `Caso: ${caseId}\n`;
-
   return lang === 'en'
-    ? `✅ Thank you! We saved your info.\n\n${caseLine}${prLine}${memberLine}Service: ${serviceName(service, lang)}\n\nDetails:\n"${details}"\n\nType "menu" for options.`
-    : `✅ ¡Gracias! Guardamos tu información.\n\n${caseLine}${prLine}${memberLine}Servicio: ${serviceName(service, lang)}\n\nDetalles:\n"${details}"\n\nEscribe "menu" para opciones.`;
+    ? (
+        '✅ Thank you, we saved your information.\n\n' +
+        caseLine +
+        priorityLine +
+        memberLine +
+        `Service: ${serviceName(service, lang)}\n\n` +
+        `Details:\n"${details}"\n\n` +
+        'We will contact you shortly.\n\n' +
+        'Type "menu" to return to the menu.'
+      )
+    : (
+        '✅ Gracias, hemos guardado tu información.\n\n' +
+        caseLine +
+        priorityLine +
+        memberLine +
+        `Servicio: ${serviceName(service, lang)}\n\n` +
+        `Detalles:\n"${details}"\n\n` +
+        'Revisaremos tu información y nos comunicaremos lo antes posible.\n\n' +
+        'Para regresar al menú escribe "menu", "inicio" o "volver".'
+      );
 }
 
 // =========================
@@ -396,7 +422,7 @@ async function postLeadToWebhook(payload) {
     try { json = JSON.parse(txt); } catch { json = null; }
 
     console.log('LEAD POST RESULT ->', resp.status);
-    console.log('LEAD POST BODY ->', txt.slice(0, 300));
+    console.log('LEAD POST BODY ->', txt.slice(0, 400));
 
     return { status: resp.status, ok: resp.ok, text: txt, json };
   } catch (e) {
