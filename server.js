@@ -447,7 +447,13 @@ function extractCity(text) {
 }
 
 app.get('/__version', (req, res) => {
-  res.json({ ok: true, tag: TAG, script_url: !!SCRIPT_WEBAPP_URL, tz: 'America/Puerto_Rico' });
+  res.json({
+    ok: true,
+    tag: TAG,
+    render_commit: process.env.RENDER_GIT_COMMIT || '',
+    render_service: process.env.RENDER_SERVICE_NAME || '',
+    node: process.version
+  });
 });
 
 app.get('/', (req, res) => {
