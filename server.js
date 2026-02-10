@@ -292,8 +292,8 @@ function askToSchedule(lang) {
   }
   return (
     `📅 ¿Deseas agendar una cita ahora?\n\n` +
-    `1️⃣ Sí, ver horarios disponibles\n` +
-    `2️⃣ No, me contactan luego`
+      `1️⃣ Sí, ver horarios disponibles\n` +
+      `2️⃣ No, me contactan luego`
   );
 }
 
