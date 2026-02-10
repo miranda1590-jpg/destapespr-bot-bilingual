@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: destapespr-bot-bilingual
+    name: destapespr-unified-bot-bilingual
     env: node
-    plan: free
-    branch: main
-    buildCommand: "npm install --no-audit --no-fund"
-    startCommand: "node server.js"
+    plan: starter
+    branch: deploy/live-bilingual
+    buildCommand: npm ci
+    startCommand: node src/server.js
     autoDeploy: true
