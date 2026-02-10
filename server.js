@@ -26,7 +26,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 const PORT = process.env.PORT || 10000;
-const TAG = 'DestapesPR Bot 5 Pro 🇵🇷';
+const TAG = '[[FORCE-20260210-070014]]';
 
 // =========================
 // Config
