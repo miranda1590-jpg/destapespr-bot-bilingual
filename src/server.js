@@ -12,7 +12,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 const PORT = process.env.PORT || 10000;
-const TAG = "DestapesPR Unified Bot 🇵🇷 [[FORCE-20260210-182347-DEPLOY]]";
+const TAG = "DestapesPR Unified Bot 🇵🇷 [[FORCE-20260211-060733-DEPLOY]]";
 
 const PHONE = '+1 787-922-0068';
 const FB_LINK = 'https://www.facebook.com/destapesPR/';
@@ -447,7 +447,13 @@ function extractCity(text) {
 }
 
 app.get('/__version', (req, res) => {
-  res.json({ ok: true, tag: TAG, script_url: !!SCRIPT_WEBAPP_URL, tz: 'America/Puerto_Rico' });
+  res.json({
+    ok: true,
+    tag: TAG,
+    render_commit: process.env.RENDER_GIT_COMMIT || '',
+    render_service: process.env.RENDER_SERVICE_NAME || '',
+    node: process.version
+  });
 });
 
 app.get('/', (req, res) => {
