@@ -5,4 +5,4 @@ RUN npm ci --omit=dev
 COPY . .
 ENV NODE_ENV=production
 EXPOSE 10000
-CMD ["node","src/server.js"]
+CMD ["node","src/server.js"]ARG CACHE_BUST=20260211-205440
