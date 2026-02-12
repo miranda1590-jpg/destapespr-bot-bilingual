@@ -12,7 +12,7 @@ app.use(express.json());
 app.use(morgan('dev'));
 
 const PORT = process.env.PORT || 10000;
-const TAG = process.env.TAG || "DestapesPR Unified Bot 🇵🇷 [[FORCE-20260212-055859-DEPLOY]]";
+const TAG = process.env.TAG || "DestapesPR Unified Bot 🇵🇷 [[FORCE-20260212-062059-DEPLOY]]";
 
 const PHONE = '+1 787-922-0068';
 const FB_LINK = 'https://www.facebook.com/destapesPR/';
