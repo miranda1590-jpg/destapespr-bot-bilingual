@@ -1,31 +1,17 @@
 {
-  "name": "destapespr-unified-bot-bilingual",
-  "version": "1.0.0",
-  "private": true,
+  "name": "destapespr-bot-bilingual",
+  "version": "29.0.0",
   "type": "module",
-  "main": "index.js",
+  "main": "src/server.js",
   "scripts": {
-    "dev": "nodemon src/server.js",
-    "db:view": "sqlite3 sessions.db 'SELECT * FROM sessions;'",
-    "db:clear": "sqlite3 sessions.db 'DELETE FROM sessions;'",
-    "kill": "kill -9 $(lsof -t -i :3000)",
-    "start": "node index.js"
+    "start": "node src/server.js"
   },
   "dependencies": {
-    "dayjs": "^1.11.19",
     "dotenv": "^16.4.5",
-    "express": "^4.21.2",
-    "morgan": "^1.10.1",
-    "node-cron": "^4.2.1",
+    "express": "^4.19.2",
+    "morgan": "^1.10.0",
     "node-fetch": "^3.3.2",
     "sqlite": "^5.1.1",
-    "sqlite3": "^5.1.7",
-    "twilio": "^5.10.2"
-  },
-  "devDependencies": {
-    "nodemon": "^3.1.10"
-  },
-  "engines": {
-    "node": "22.x"
+    "sqlite3": "^5.1.7"
   }
 }
