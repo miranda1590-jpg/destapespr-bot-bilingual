@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "main": "src/server.js",
+  "main": "index.js",
   "scripts": {
     "dev": "nodemon src/server.js",
     "db:view": "sqlite3 sessions.db 'SELECT * FROM sessions;'",
     "db:clear": "sqlite3 sessions.db 'DELETE FROM sessions;'",
     "kill": "kill -9 $(lsof -t -i :3000)",
-    "start": "node src/server.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "dayjs": "^1.11.19",
