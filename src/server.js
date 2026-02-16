@@ -371,7 +371,7 @@ app.get('/health', async (req, res) => {
   }
 });
 
-app.post('/twilio', async (req, res) => {
+app.post(["/twilio","/webhook/whatsapp"], async (req, res) => {
   try {
     const { from, body, profileName } = parseInbound(req);
     if (!from) return res.status(200).type('text/xml').send(twiml(''));
@@ -524,3 +524,7 @@ initDB().then(() => {
   console.error('❌ Failed to initialize database:', err);
   process.exit(1);
 });
+
+
+app.get("/webhook/whatsapp", (req,res)=>res.status(200).send("OK"));
+app.get("/twilio", (req,res)=>res.status(200).send("OK"));
