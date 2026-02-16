@@ -1,6 +1,6 @@
 {
   "name": "destapespr-bot-bilingual",
-  "version": "29.0.0",
+  "version": "29.0.1",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
