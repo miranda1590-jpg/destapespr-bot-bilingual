@@ -51,92 +51,71 @@ async function initDB() {
   console.log('✅ Database initialized');
 }
 
-function nowMs() {
-  return Date.now();
-}
+function nowMs(){ return Date.now(); }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function b64url(obj) {
+function b64url(obj){
   const s = JSON.stringify(obj);
-  return Buffer.from(s, 'utf8')
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/g, '');
+  return Buffer.from(s,'utf8').toString('base64')
+    .replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,'');
 }
 
-async function fetchTextWithTimeout(url) {
+async function fetchTextWithTimeout(url){
   const ctrl = new AbortController();
-  const t = setTimeout(() => ctrl.abort(), FETCH_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, { method: 'GET', redirect: 'follow', signal: ctrl.signal });
+  const t = setTimeout(()=>ctrl.abort(), FETCH_TIMEOUT_MS);
+  try{
+    const res = await fetch(url,{ method:'GET', redirect:'follow', signal:ctrl.signal });
     const text = await res.text();
     return { status: res.status, text };
-  } finally {
-    clearTimeout(t);
-  }
+  } finally { clearTimeout(t); }
 }
 
-async function appsGet(action, payload = {}, extraQuery = {}) {
-  if (!APPS_SCRIPT_URL) throw new Error('missing APPS_SCRIPT_URL');
+async function appsGet(action, payload = {}, extraQuery = {}){
+  if(!APPS_SCRIPT_URL) throw new Error('missing APPS_SCRIPT_URL');
 
   const qs = new URLSearchParams();
-  qs.set('action', String(action || '').trim());
+  qs.set('action', String(action||'').trim());
 
-  if (action !== 'ready') {
-    if (!APPS_SCRIPT_TOKEN) throw new Error('missing APPS_SCRIPT_TOKEN');
+  if(action !== 'ready'){
+    if(!APPS_SCRIPT_TOKEN) throw new Error('missing APPS_SCRIPT_TOKEN');
     qs.set('token', APPS_SCRIPT_TOKEN);
   }
 
-  if (payload && Object.keys(payload).length) qs.set('p', b64url(payload));
+  if(payload && Object.keys(payload).length) qs.set('p', b64url(payload));
 
-  for (const [k, v] of Object.entries(extraQuery || {})) {
-    if (v !== undefined && v !== null && String(v) !== '') qs.set(k, String(v));
+  for(const [k,v] of Object.entries(extraQuery||{})){
+    if(v !== undefined && v !== null && String(v) !== '') qs.set(k, String(v));
   }
 
   const url = `${APPS_SCRIPT_URL}?${qs.toString()}`;
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
+  for(let attempt=1; attempt<=MAX_RETRIES; attempt++){
+    try{
       const { status, text } = await fetchTextWithTimeout(url);
 
       let json;
-      try {
-        json = JSON.parse(text);
-      } catch {
-        if (attempt < MAX_RETRIES) {
-          await sleep(RETRY_DELAY_MS * attempt);
-          continue;
-        }
-        return { ok: false, error: 'non_json_response', status, raw: text.slice(0, 500) };
+      try{ json = JSON.parse(text); }
+      catch{
+        if(attempt < MAX_RETRIES){ await sleep(RETRY_DELAY_MS*attempt); continue; }
+        return { ok:false, error:'non_json_response', status, raw:text.slice(0,500) };
       }
 
-      if (json?.ok === true) return json;
-      if (json?.error === 'unauthorized') return json;
+      if(json?.ok === true) return json;
+      if(json?.error === 'unauthorized') return json;
 
-      if (attempt < MAX_RETRIES) {
-        await sleep(RETRY_DELAY_MS * attempt);
-        continue;
-      }
-      return json || { ok: false, error: 'unknown' };
-    } catch (err) {
+      if(attempt < MAX_RETRIES){ await sleep(RETRY_DELAY_MS*attempt); continue; }
+      return json || { ok:false, error:'unknown' };
+    } catch(err){
       const msg = err?.name === 'AbortError' ? 'timeout' : String(err?.message || err);
-      if (attempt < MAX_RETRIES) {
-        await sleep(RETRY_DELAY_MS * attempt);
-        continue;
-      }
-      return { ok: false, error: 'fetch_failed', details: msg };
+      if(attempt < MAX_RETRIES){ await sleep(RETRY_DELAY_MS*attempt); continue; }
+      return { ok:false, error:'fetch_failed', details: msg };
     }
   }
-
-  return { ok: false, error: 'max_retries_exceeded' };
+  return { ok:false, error:'max_retries_exceeded' };
 }
 
-async function logError(from, caseId, action, error, details) {
-  try {
+async function logError(from, caseId, action, error, details){
+  try{
     await db.run(
       'INSERT INTO error_log (timestamp, from_number, case_id, action, error, details) VALUES (?, ?, ?, ?, ?, ?)',
       new Date().toISOString(),
@@ -149,166 +128,215 @@ async function logError(from, caseId, action, error, details) {
   } catch {}
 }
 
-function normalizeFrom(from) {
-  const s = String(from || '').trim();
-  if (!s) return '';
-  if (/^whatsapp:/i.test(s)) return s;
-  if (/^\+?\d+$/.test(s)) return `whatsapp:${s.startsWith('+') ? s : `+${s}`}`;
+function normalizeFrom(from){
+  const s = String(from||'').trim();
+  if(!s) return '';
+  if(/^whatsapp:/i.test(s)) return s;
+  if(/^\+?\d+$/.test(s)) return `whatsapp:${s.startsWith('+') ? s : `+${s}`}`;
   return s;
 }
 
-function makeCaseId() {
+function makeCaseId(){
   const d = new Date();
   const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  const rnd = String(Math.floor(1000 + Math.random() * 9000));
+  const m = String(d.getUTCMonth()+1).padStart(2,'0');
+  const day = String(d.getUTCDate()).padStart(2,'0');
+  const rnd = String(Math.floor(1000 + Math.random()*9000));
   return `DP-${y}${m}${day}-${rnd}`;
 }
 
-async function loadSession(key) {
+async function loadSession(key){
   const row = await db.get('SELECT v, updated_at FROM sessions WHERE k=?', key);
-  if (!row) return null;
-  if (nowMs() - row.updated_at > SESSION_TTL_MS) {
+  if(!row) return null;
+  if(nowMs() - row.updated_at > SESSION_TTL_MS){
     await db.run('DELETE FROM sessions WHERE k=?', key);
     return null;
   }
-  try {
-    return JSON.parse(row.v);
-  } catch {
-    return null;
-  }
+  try{ return JSON.parse(row.v); } catch { return null; }
 }
 
-async function saveSession(key, obj) {
-  const v = JSON.stringify(obj || {});
+async function saveSession(key, obj){
+  const v = JSON.stringify(obj||{});
   const t = nowMs();
   await db.run(
     'INSERT INTO sessions(k,v,updated_at) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at',
-    key,
-    v,
-    t
+    key, v, t
   );
 }
 
-function clean(s) {
-  return String(s || '').trim();
-}
+function clean(s){ return String(s||'').trim(); }
 
-function parseInbound(req) {
+function parseInbound(req){
   const from = normalizeFrom(req.body.From || req.body.from);
   const body = clean(req.body.Body || req.body.body);
   const profileName = clean(req.body.ProfileName || req.body.profileName);
   return { from, body, profileName };
 }
 
-function escapeXml(s) {
-  return String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
+function escapeXml(s){
+  return String(s||'')
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;')
+    .replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;')
+    .replace(/'/g,'&apos;');
 }
 
-function twiml(msg) {
+function twiml(msg){
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(msg)}</Message></Response>`;
 }
 
-function isHello(text) {
-  const t = clean(text).toLowerCase();
-  return ['hola', 'hello', 'hi', 'buenas', 'saludos', 'menu', 'start', 'inicio', 'back', 'volver'].includes(t);
+function norm(s){
+  return String(s||'')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu,'');
 }
 
-function menuText(lang) {
-  if (lang === 'en') {
+function isHello(text){
+  const t = norm(text);
+  return ['hola','hello','hi','hey','buenas','saludos','menu','start','inicio','back','volver'].includes(t);
+}
+
+function mainMenuPretty(lang){
+  if(lang === 'en'){
     return [
-      `${TAG}`,
-      `Choose an option:`,
-      `1) Clog / Drain (Destape)`,
-      `2) Leak / Plumbing repair`,
-      `3) Water heater (Calentador)`,
-      `4) Schedule an appointment`,
+      `👋 Welcome to DestapesPR.`,
       ``,
-      `Type: 1,2,3,4  |  Type "español" to switch`,
-      `Facebook: ${FB_LINK}`,
-      `Phone: ${PHONE}`,
+      `Choose a number:`,
+      `1️⃣ Drain cleaning (clogged drains/pipes)`,
+      `2️⃣ Leak (water leaks / dampness)`,
+      `3️⃣ Camera inspection (video)`,
+      `4️⃣ Water heater (gas/electric/solar)`,
+      `5️⃣ Other plumbing service`,
+      `6️⃣ Appointment / schedule a visit`,
+      ``,
+      `💬 Commands: type "start", "menu" or "back" to return.`,
+      `🌐 Type "español" to switch language.`,
+      ``,
+      `📘 Facebook: ${FB_LINK}`,
+      `📞 Phone: ${PHONE}`
     ].join('\n');
   }
   return [
-    `${TAG}`,
-    `Elige una opción:`,
-    `1) Destape / Drenaje`,
-    `2) Fuga / Reparación`,
-    `3) Calentador`,
-    `4) Agendar cita`,
+    `👋 Bienvenido a DestapesPR.`,
     ``,
-    `Escribe: 1,2,3,4  |  Escribe "english" para cambiar`,
-    `Facebook: ${FB_LINK}`,
-    `Tel: ${PHONE}`,
+    `Selecciona un número:`,
+    `1️⃣ Destape (drenajes o tuberías tapadas)`,
+    `2️⃣ Fuga de agua (goteos / filtraciones)`,
+    `3️⃣ Inspección con cámara (video)`,
+    `4️⃣ Calentador (gas/eléctrico/solar)`,
+    `5️⃣ Otro servicio de plomería`,
+    `6️⃣ Cita / coordinar visita`,
+    ``,
+    `💬 Comandos: escribe "inicio", "menu" o "volver" para regresar.`,
+    `🌐 Escribe "english" para cambiar idioma.`,
+    ``,
+    `📘 Facebook: ${FB_LINK}`,
+    `📞 Tel: ${PHONE}`
   ].join('\n');
 }
 
-function askLeadData(lang, serviceLabel) {
-  if (lang === 'en') {
+function heaterTypeMenu(lang){
+  if(lang === 'en'){
     return [
-      `Got it ✅ (${serviceLabel})`,
-      `Reply with ONE message like this:`,
+      `✅ Water heater selected.`,
+      `Choose heater type:`,
+      `1️⃣ Solar`,
+      `2️⃣ Conventional (gas/electric)`,
+      ``,
+      `Reply 1 or 2.`
+    ].join('\n');
+  }
+  return [
+    `✅ Servicio: Calentador.`,
+    `Elige tipo:`,
+    `1️⃣ Solar`,
+    `2️⃣ Convencional (gas/eléctrico)`,
+    ``,
+    `Responde 1 o 2.`
+  ].join('\n');
+}
+
+function serviceLabel(service, lang){
+  const map = {
+    destape: { es:'Destape', en:'Drain cleaning' },
+    fuga: { es:'Fuga de agua', en:'Water leak' },
+    camara: { es:'Inspección con cámara', en:'Camera inspection' },
+    calentador: { es:'Calentador', en:'Water heater' },
+    otro: { es:'Otro servicio', en:'Other service' },
+    cita: { es:'Cita / coordinar visita', en:'Appointment' },
+  };
+  return (map[service] || map.otro)[lang === 'en' ? 'en' : 'es'];
+}
+
+function askLeadDataPretty(lang, service, heaterType){
+  const svc = serviceLabel(service, lang);
+  const ht = heaterType && heaterType !== 'N/A'
+    ? (lang === 'en' ? `Heater type: ${heaterType}\n` : `Tipo: ${heaterType}\n`)
+    : '';
+  if(lang === 'en'){
+    return [
+      `✅ Selected: ${svc}`,
+      ht ? `✅ ${ht.trim()}` : null,
+      ``,
+      `Send everything in ONE message like:`,
       `Name: John`,
       `City: Caguas`,
       `Phone: 7875551234`,
       `Details: ...`,
-    ].join('\n');
+    ].filter(Boolean).join('\n');
   }
   return [
-    `Perfecto ✅ (${serviceLabel})`,
-    `Contesta con UN solo mensaje así:`,
+    `✅ Servicio: ${svc}`,
+    ht ? `✅ ${ht.trim()}` : null,
+    ``,
+    `Envía todo en UN solo mensaje así:`,
     `Nombre: Juan`,
     `Pueblo: Caguas`,
     `Tel: 7875551234`,
     `Detalles: ...`,
-  ].join('\n');
+  ].filter(Boolean).join('\n');
 }
 
-function parseLeadMessage(text) {
-  const t = String(text || '');
-  const lines = t.split('\n').map((x) => x.trim()).filter(Boolean);
-  const out = { name: '', city: '', phone: '', details: '' };
+function parseLeadMessage(text){
+  const t = String(text||'');
+  const lines = t.split('\n').map(x=>x.trim()).filter(Boolean);
+  const out = { name:'', city:'', phone:'', details:'' };
 
-  for (const l of lines) {
+  for(const l of lines){
     const m1 = l.match(/^(nombre|name)\s*:\s*(.+)$/i);
-    if (m1) { out.name = clean(m1[2]); continue; }
+    if(m1){ out.name = clean(m1[2]); continue; }
 
     const m2 = l.match(/^(pueblo|ciudad|city)\s*:\s*(.+)$/i);
-    if (m2) { out.city = clean(m2[2]); continue; }
+    if(m2){ out.city = clean(m2[2]); continue; }
 
     const m3 = l.match(/^(tel|telefono|phone)\s*:\s*(.+)$/i);
-    if (m3) {
-      let phone = clean(m3[2]).replace(/[^\d+]/g, '');
-      if (phone && !phone.startsWith('+')) phone = '+1' + phone;
+    if(m3){
+      let phone = clean(m3[2]).replace(/[^\d+]/g,'');
+      if(phone && !phone.startsWith('+')) phone = '+1' + phone;
       out.phone = phone;
       continue;
     }
 
     const m4 = l.match(/^(detalles|details)\s*:\s*(.+)$/i);
-    if (m4) { out.details = clean(m4[2]); continue; }
+    if(m4){ out.details = clean(m4[2]); continue; }
   }
 
-  if (!out.details) out.details = clean(lines.join(' '));
-
-  if (out.name.length > 100) out.name = out.name.slice(0, 100);
-  if (out.city.length > 50) out.city = out.city.slice(0, 50);
-  if (out.details.length > 500) out.details = out.details.slice(0, 500);
-
+  if(!out.details) out.details = clean(lines.join(' '));
+  if(out.name.length > 100) out.name = out.name.slice(0,100);
+  if(out.city.length > 50) out.city = out.city.slice(0,50);
+  if(out.details.length > 500) out.details = out.details.slice(0,500);
   return out;
 }
 
-async function ensureCase(session) {
-  if (!session.case_id) session.case_id = makeCaseId();
+async function ensureCase(session){
+  if(!session.case_id) session.case_id = makeCaseId();
   return session.case_id;
 }
 
-async function pushLeadToScript({ session, from, profileName }) {
+async function pushLeadToScript({ session, from, profileName }){
   const caseId = await ensureCase(session);
 
   const payload = {
@@ -333,45 +361,45 @@ async function pushLeadToScript({ session, from, profileName }) {
     calendar_event_id: session.calendar_event_id || '',
   };
 
-  try {
+  try{
     const resp = await appsGet('lead', payload);
-    if (!resp?.ok) await logError(from, caseId, 'push_lead', resp?.error || 'unknown', resp);
+    if(!resp?.ok) await logError(from, caseId, 'push_lead', resp?.error || 'unknown', resp);
     return resp;
-  } catch (err) {
+  } catch(err){
     await logError(from, caseId, 'push_lead', err?.message || String(err), { stack: err?.stack });
-    return { ok: false, error: 'exception', details: err?.message || String(err) };
+    return { ok:false, error:'exception', details: err?.message || String(err) };
   }
 }
 
-async function listAvailability(session) {
+async function listAvailability(session){
   const limit = 6;
   const daysAhead = 14;
   const resp = await appsGet('availability', {}, { limit, days_ahead: daysAhead });
-  if (!resp?.ok || !Array.isArray(resp.slots)) return null;
+  if(!resp?.ok || !Array.isArray(resp.slots)) return null;
   session.slots = resp.slots;
   session.slot_offer_at = new Date().toISOString();
   return resp.slots;
 }
 
-function formatSlots(lang, slots) {
+function formatSlots(lang, slots){
   const lines = [];
-  lines.push(lang === 'en' ? `Available slots:` : `Horarios disponibles:`);
-  for (let i = 0; i < slots.length; i++) {
+  lines.push(lang === 'en' ? `✅ Available slots:` : `✅ Horarios disponibles:`);
+  for(let i=0;i<slots.length;i++){
     const s = slots[i];
     const label = lang === 'en' ? s.slot_en : s.slot_es;
-    lines.push(`${i + 1}) ${s.ymd} — ${label}`);
+    lines.push(`${i+1}️⃣ ${s.ymd} — ${label}`);
   }
   lines.push('');
   lines.push(lang === 'en'
     ? `Reply with the number (1-${slots.length}) to book.`
-    : `Contesta con el número (1-${slots.length}) para reservar.`);
+    : `Responde con el número (1-${slots.length}) para reservar.`);
   return lines.join('\n');
 }
 
-async function bookSlot({ session, slotIndex, from, profileName }) {
+async function bookSlot({ session, slotIndex, from, profileName }){
   const slots = Array.isArray(session.slots) ? session.slots : [];
   const s = slots[slotIndex];
-  if (!s) return { ok: false, error: 'invalid_slot' };
+  if(!s) return { ok:false, error:'invalid_slot' };
 
   const caseId = await ensureCase(session);
 
@@ -388,9 +416,9 @@ async function bookSlot({ session, slotIndex, from, profileName }) {
   };
 
   const resp = await appsGet('book', payload);
-  if (!resp?.ok) {
+  if(!resp?.ok){
     await logError(from, caseId, 'book_slot', resp?.error || 'unknown', { resp, payload });
-    return resp || { ok: false, error: 'book_failed' };
+    return resp || { ok:false, error:'book_failed' };
   }
 
   session.appointment_start = resp.start_iso || s.start_iso || '';
@@ -398,13 +426,24 @@ async function bookSlot({ session, slotIndex, from, profileName }) {
   session.calendar_event_id = resp.event_id || '';
   session.status = 'Programado';
 
-  return { ok: true, book: resp };
+  return { ok:true, book: resp };
+}
+
+function mapChoiceToService(choice){
+  const t = norm(choice);
+  if(t === '1') return 'destape';
+  if(t === '2') return 'fuga';
+  if(t === '3') return 'camara';
+  if(t === '4') return 'calentador';
+  if(t === '5') return 'otro';
+  if(t === '6') return 'cita';
+  return null;
 }
 
 const twilioHandler = async (req, res) => {
-  try {
+  try{
     const { from, body, profileName } = parseInbound(req);
-    if (!from) return res.status(200).type('text/xml').send(twiml(''));
+    if(!from) return res.status(200).type('text/xml').send(twiml(''));
 
     const key = from;
     const session = (await loadSession(key)) || {
@@ -412,65 +451,84 @@ const twilioHandler = async (req, res) => {
       step: 'menu',
       created_at: new Date().toISOString(),
       last_seen: nowMs(),
+      service: '',
+      service_label: '',
+      heater_type: 'N/A',
+      slots: []
     };
 
     const idle = nowMs() - (session.last_seen || 0);
     session.last_seen = nowMs();
 
-    const lower = clean(body).toLowerCase();
+    const lower = norm(body);
 
-    if (lower === 'english') session.lang = 'en';
-    if (lower === 'español' || lower === 'espanol') session.lang = 'es';
+    if(lower === 'english') session.lang = 'en';
+    if(lower === 'español' || lower === 'espanol') session.lang = 'es';
 
-    if (idle > WELCOME_AFTER_MS || isHello(body) || lower === 'menu' || lower === 'start' || lower === 'back' || lower === 'volver') {
+    if(idle > WELCOME_AFTER_MS || isHello(body)){
       session.step = 'menu';
       session.service = '';
       session.service_label = '';
       session.heater_type = 'N/A';
       session.slots = [];
       await saveSession(key, session);
-      return res.status(200).type('text/xml').send(twiml(menuText(session.lang)));
+      return res.status(200).type('text/xml').send(twiml(mainMenuPretty(session.lang)));
     }
 
-    if (session.step === 'menu') {
-      if (['1', '2', '3', '4'].includes(lower)) {
-        if (lower === '1') { session.service = 'destape'; session.service_label = session.lang === 'en' ? 'Clog / Drain' : 'Destape / Drenaje'; session.step = 'lead'; }
-        if (lower === '2') { session.service = 'reparacion'; session.service_label = session.lang === 'en' ? 'Leak / Repair' : 'Fuga / Reparación'; session.step = 'lead'; }
-        if (lower === '3') { session.service = 'calentador'; session.service_label = 'Calentador'; session.step = 'heater_type'; }
-        if (lower === '4') { session.service = 'cita'; session.service_label = session.lang === 'en' ? 'Appointment' : 'Cita'; session.step = 'lead_then_slots'; }
+    if(lower === 'menu' || lower === 'start' || lower === 'inicio' || lower === 'back' || lower === 'volver'){
+      session.step = 'menu';
+      session.service = '';
+      session.service_label = '';
+      session.heater_type = 'N/A';
+      session.slots = [];
+      await saveSession(key, session);
+      return res.status(200).type('text/xml').send(twiml(mainMenuPretty(session.lang)));
+    }
 
-        await ensureCase(session);
+    if(session.step === 'menu'){
+      const svc = mapChoiceToService(body);
+      if(!svc){
         await saveSession(key, session);
-
-        if (session.step === 'heater_type') {
-          const msg = session.lang === 'en'
-            ? `Water heater type?\n1) Solar\n2) Conventional\n\nReply 1 or 2`
-            : `¿Tipo de calentador?\n1) Solar\n2) Convencional\n\nContesta 1 o 2`;
-          return res.status(200).type('text/xml').send(twiml(msg));
-        }
-
-        return res.status(200).type('text/xml').send(twiml(askLeadData(session.lang, session.service_label)));
+        return res.status(200).type('text/xml').send(twiml(mainMenuPretty(session.lang)));
       }
 
+      session.service = svc;
+      session.service_label = serviceLabel(svc, session.lang);
+
+      await ensureCase(session);
+
+      if(svc === 'calentador'){
+        session.step = 'heater_type';
+        await saveSession(key, session);
+        return res.status(200).type('text/xml').send(twiml(heaterTypeMenu(session.lang)));
+      }
+
+      if(svc === 'cita'){
+        session.step = 'lead_then_slots';
+        await saveSession(key, session);
+        return res.status(200).type('text/xml').send(twiml(askLeadDataPretty(session.lang, svc, 'N/A')));
+      }
+
+      session.step = 'lead';
       await saveSession(key, session);
-      return res.status(200).type('text/xml').send(twiml(menuText(session.lang)));
+      return res.status(200).type('text/xml').send(twiml(askLeadDataPretty(session.lang, svc, 'N/A')));
     }
 
-    if (session.step === 'heater_type') {
-      if (lower === '1') session.heater_type = 'SOLAR';
-      else if (lower === '2') session.heater_type = 'Convencional';
-      else {
+    if(session.step === 'heater_type'){
+      if(lower === '1') session.heater_type = 'SOLAR';
+      else if(lower === '2') session.heater_type = 'Convencional';
+      else{
         await saveSession(key, session);
-        const msg = session.lang === 'en' ? `Reply 1 (Solar) or 2 (Conventional)` : `Contesta 1 (Solar) o 2 (Convencional)`;
-        return res.status(200).type('text/xml').send(twiml(msg));
+        return res.status(200).type('text/xml').send(twiml(heaterTypeMenu(session.lang)));
       }
       session.step = 'lead';
       await saveSession(key, session);
-      return res.status(200).type('text/xml').send(twiml(askLeadData(session.lang, session.service_label)));
+      return res.status(200).type('text/xml').send(twiml(askLeadDataPretty(session.lang, 'calentador', session.heater_type)));
     }
 
-    if (session.step === 'lead' || session.step === 'lead_then_slots') {
+    if(session.step === 'lead' || session.step === 'lead_then_slots'){
       const parsed = parseLeadMessage(body);
+
       session.name = parsed.name || session.name || profileName || '';
       session.city = parsed.city || session.city || '';
       session.phone = parsed.phone || session.phone || '';
@@ -478,17 +536,17 @@ const twilioHandler = async (req, res) => {
       session.status = session.status || 'En proceso';
 
       const leadResp = await pushLeadToScript({ session, from, profileName });
-      if (!leadResp?.ok) {}
+      if(!leadResp?.ok){}
 
-      if (session.step === 'lead_then_slots') {
+      if(session.step === 'lead_then_slots'){
         const slots = await listAvailability(session);
         session.step = 'pick_slot';
         await saveSession(key, session);
 
-        if (!slots?.length) {
+        if(!slots?.length){
           const msg = session.lang === 'en'
-            ? `I couldn't find available slots right now. We'll contact you shortly.\nCase: ${session.case_id}`
-            : `No pude encontrar horarios disponibles ahora mismo. Te contactamos pronto.\nCaso: ${session.case_id}`;
+            ? `⚠️ No slots available right now. We'll contact you shortly.\nCase: ${session.case_id}`
+            : `⚠️ No hay horarios disponibles ahora mismo. Te contactamos pronto.\nCaso: ${session.case_id}`;
           return res.status(200).type('text/xml').send(twiml(msg));
         }
 
@@ -499,50 +557,50 @@ const twilioHandler = async (req, res) => {
       await saveSession(key, session);
 
       const msg = session.lang === 'en'
-        ? `Done ✅ Case: ${session.case_id}\nWe will contact you shortly.`
-        : `Listo ✅ Caso: ${session.case_id}\nTe estaremos contactando ahora.`;
+        ? `✅ Done. Case: ${session.case_id}\nWe will contact you shortly.`
+        : `✅ Listo. Caso: ${session.case_id}\nTe estaremos contactando pronto.`;
 
       return res.status(200).type('text/xml').send(twiml(msg));
     }
 
-    if (session.step === 'pick_slot') {
-      const n = Number(lower);
+    if(session.step === 'pick_slot'){
       const slots = Array.isArray(session.slots) ? session.slots : [];
-      if (!n || n < 1 || n > slots.length) {
+      const n = Number(lower);
+
+      if(!n || n < 1 || n > slots.length){
         await saveSession(key, session);
         const msg = session.lang === 'en'
           ? `Reply with a number 1-${slots.length}.`
-          : `Contesta con un número 1-${slots.length}.`;
+          : `Responde con un número 1-${slots.length}.`;
         return res.status(200).type('text/xml').send(twiml(msg));
       }
 
       const out = await bookSlot({ session, slotIndex: n - 1, from, profileName });
+
       session.step = 'menu';
       session.slots = [];
       await saveSession(key, session);
 
-      if (!out?.ok) {
+      if(!out?.ok){
         const errorMsg = session.lang === 'en'
-          ? `I couldn't book that slot. Please try again from the menu or call us at ${PHONE}.\nCase: ${session.case_id}`
-          : `No pude reservar ese horario. Intenta nuevamente desde el menú o llámanos al ${PHONE}.\nCaso: ${session.case_id}`;
+          ? `I couldn't book that slot. Try again from the menu or call ${PHONE}.\nCase: ${session.case_id}`
+          : `No pude reservar ese horario. Intenta nuevamente desde el menú o llama al ${PHONE}.\nCaso: ${session.case_id}`;
         await logError(from, session.case_id, 'book_slot_ui', out?.error || 'unknown', out);
         return res.status(200).type('text/xml').send(twiml(errorMsg));
       }
 
       const msg = session.lang === 'en'
-        ? `Booked ✅\nCase: ${session.case_id}\nStart: ${session.appointment_start}\nEnd: ${session.appointment_end}`
-        : `Cita agendada ✅\nCaso: ${session.case_id}\nInicio: ${session.appointment_start}\nFin: ${session.appointment_end}`;
+        ? `✅ Appointment booked.\nCase: ${session.case_id}\nStart: ${session.appointment_start}\nEnd: ${session.appointment_end}`
+        : `✅ Cita agendada.\nCaso: ${session.case_id}\nInicio: ${session.appointment_start}\nFin: ${session.appointment_end}`;
 
       return res.status(200).type('text/xml').send(twiml(msg));
     }
 
     session.step = 'menu';
     await saveSession(key, session);
-    return res.status(200).type('text/xml').send(twiml(menuText(session.lang)));
-  } catch (e) {
-    try {
-      await logError(req.body?.From, null, 'twilio_handler', e?.message || String(e), { stack: e?.stack });
-    } catch {}
+    return res.status(200).type('text/xml').send(twiml(mainMenuPretty(session.lang)));
+  } catch(e){
+    try{ await logError(req.body?.From, null, 'twilio_handler', e?.message || String(e), { stack: e?.stack }); } catch {}
     return res.status(200).type('text/xml').send(twiml(''));
   }
 };
@@ -550,26 +608,22 @@ const twilioHandler = async (req, res) => {
 app.post('/twilio', twilioHandler);
 app.post('/webhook/whatsapp', twilioHandler);
 
-app.get('/', (req, res) => res.send('DestapesPR Bot activo ✅'));
+app.get('/', (req,res) => res.send('DestapesPR Bot activo ✅'));
 
-app.get('/health', async (req, res) => {
-  try {
+app.get('/health', async (req,res) => {
+  try{
     const scriptCheck = await appsGet('ready');
     res.json({
-      ok: true,
+      ok:true,
       tag: TAG,
       apps_script: scriptCheck?.ok ? 'connected' : 'error',
-      apps_script_version: scriptCheck?.version || 'unknown',
+      apps_script_version: scriptCheck?.version || 'unknown'
     });
-  } catch (err) {
-    res.status(500).json({ ok: false, error: err?.message || String(err), tag: TAG });
+  } catch(err){
+    res.status(500).json({ ok:false, error: err?.message || String(err), tag: TAG });
   }
 });
 
-initDB()
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`✅ Server listening on port ${PORT}`);
-    });
-  })
-  .catch(() => process.exit(1));
+initDB().then(()=>{
+  app.listen(PORT, ()=>console.log(`✅ ${TAG} listening on ${PORT}`));
+}).catch(()=>process.exit(1));
