@@ -30,24 +30,8 @@ let db;
 
 async function initDB() {
   db = await open({ filename: './data.sqlite', driver: sqlite3.Database });
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS sessions (
-      k TEXT PRIMARY KEY,
-      v TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    );
-  `);
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS error_log (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      timestamp TEXT NOT NULL,
-      from_number TEXT,
-      case_id TEXT,
-      action TEXT,
-      error TEXT,
-      details TEXT
-    );
-  `);
+  await db.exec(`CREATE TABLE IF NOT EXISTS sessions ( k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER NOT NULL );`);
+  await db.exec(`CREATE TABLE IF NOT EXISTS error_log ( id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, from_number TEXT, case_id TEXT, action TEXT, error TEXT, details TEXT );`);
   console.log('✅ Database initialized');
 }
 
@@ -96,6 +80,7 @@ async function appsGet(action, payload = {}, extraQuery = {}){
       let json;
       try{ json = JSON.parse(text); }
       catch{
+        console.error('❌ Apps non-json:', text.slice(0,200));
         if(attempt < MAX_RETRIES){ await sleep(RETRY_DELAY_MS*attempt); continue; }
         return { ok:false, error:'non_json_response', status, raw:text.slice(0,500) };
       }
@@ -103,10 +88,12 @@ async function appsGet(action, payload = {}, extraQuery = {}){
       if(json?.ok === true) return json;
       if(json?.error === 'unauthorized') return json;
 
+      console.warn('⚠️ Apps error:', json?.error || 'unknown');
       if(attempt < MAX_RETRIES){ await sleep(RETRY_DELAY_MS*attempt); continue; }
       return json || { ok:false, error:'unknown' };
     } catch(err){
       const msg = err?.name === 'AbortError' ? 'timeout' : String(err?.message || err);
+      console.error('❌ Apps fetch error:', msg);
       if(attempt < MAX_RETRIES){ await sleep(RETRY_DELAY_MS*attempt); continue; }
       return { ok:false, error:'fetch_failed', details: msg };
     }
@@ -165,6 +152,9 @@ async function saveSession(key, obj){
 }
 
 function clean(s){ return String(s||'').trim(); }
+function norm(s){
+  return String(s||'').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu,'');
+}
 
 function parseInbound(req){
   const from = normalizeFrom(req.body.From || req.body.from);
@@ -186,14 +176,6 @@ function twiml(msg){
   return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(msg)}</Message></Response>`;
 }
 
-function norm(s){
-  return String(s||'')
-    .trim()
-    .toLowerCase()
-    .normalize('NFD')
-    .replace(/\p{Diacritic}/gu,'');
-}
-
 function isHello(text){
   const t = norm(text);
   return ['hola','hello','hi','hey','buenas','saludos','menu','start','inicio','back','volver'].includes(t);
@@ -212,8 +194,8 @@ function mainMenuPretty(lang){
       `5️⃣ Other plumbing service`,
       `6️⃣ Appointment / schedule a visit`,
       ``,
-      `💬 Commands: type "start", "menu" or "back" to return.`,
-      `🌐 Type "español" to switch language.`,
+      `💬 Commands: "start", "menu" or "back".`,
+      `🌐 Type "español" to switch.`,
       ``,
       `📘 Facebook: ${FB_LINK}`,
       `📞 Phone: ${PHONE}`
@@ -230,8 +212,8 @@ function mainMenuPretty(lang){
     `5️⃣ Otro servicio de plomería`,
     `6️⃣ Cita / coordinar visita`,
     ``,
-    `💬 Comandos: escribe "inicio", "menu" o "volver" para regresar.`,
-    `🌐 Escribe "english" para cambiar idioma.`,
+    `💬 Comandos: "inicio", "menu" o "volver".`,
+    `🌐 Escribe "english" para cambiar.`,
     ``,
     `📘 Facebook: ${FB_LINK}`,
     `📞 Tel: ${PHONE}`
@@ -240,23 +222,9 @@ function mainMenuPretty(lang){
 
 function heaterTypeMenu(lang){
   if(lang === 'en'){
-    return [
-      `✅ Water heater selected.`,
-      `Choose heater type:`,
-      `1️⃣ Solar`,
-      `2️⃣ Conventional (gas/electric)`,
-      ``,
-      `Reply 1 or 2.`
-    ].join('\n');
+    return `✅ Water heater selected.\nChoose type:\n1️⃣ Solar\n2️⃣ Conventional (gas/electric)\n\nReply 1 or 2.`;
   }
-  return [
-    `✅ Servicio: Calentador.`,
-    `Elige tipo:`,
-    `1️⃣ Solar`,
-    `2️⃣ Convencional (gas/eléctrico)`,
-    ``,
-    `Responde 1 o 2.`
-  ].join('\n');
+  return `✅ Servicio: Calentador.\nElige tipo:\n1️⃣ Solar\n2️⃣ Convencional (gas/eléctrico)\n\nResponde 1 o 2.`;
 }
 
 function serviceLabel(service, lang){
@@ -281,7 +249,7 @@ function askLeadDataPretty(lang, service, heaterType){
       `✅ Selected: ${svc}`,
       ht ? `✅ ${ht.trim()}` : null,
       ``,
-      `Send everything in ONE message like:`,
+      `Send ONE message like:`,
       `Name: John`,
       `City: Caguas`,
       `Phone: 7875551234`,
@@ -292,7 +260,7 @@ function askLeadDataPretty(lang, service, heaterType){
     `✅ Servicio: ${svc}`,
     ht ? `✅ ${ht.trim()}` : null,
     ``,
-    `Envía todo en UN solo mensaje así:`,
+    `Envía UN mensaje así:`,
     `Nombre: Juan`,
     `Pueblo: Caguas`,
     `Tel: 7875551234`,
@@ -363,10 +331,10 @@ async function pushLeadToScript({ session, from, profileName }){
 
   try{
     const resp = await appsGet('lead', payload);
-    if(!resp?.ok) await logError(from, caseId, 'push_lead', resp?.error || 'unknown', resp);
+    if(!resp?.ok) await logError(from, caseId, 'lead', resp?.error || 'unknown', resp);
     return resp;
   } catch(err){
-    await logError(from, caseId, 'push_lead', err?.message || String(err), { stack: err?.stack });
+    await logError(from, caseId, 'lead', err?.message || String(err), { stack: err?.stack });
     return { ok:false, error:'exception', details: err?.message || String(err) };
   }
 }
@@ -374,11 +342,14 @@ async function pushLeadToScript({ session, from, profileName }){
 async function listAvailability(session){
   const limit = 6;
   const daysAhead = 14;
-  const resp = await appsGet('availability', {}, { limit, days_ahead: daysAhead });
-  if(!resp?.ok || !Array.isArray(resp.slots)) return null;
-  session.slots = resp.slots;
-  session.slot_offer_at = new Date().toISOString();
-  return resp.slots;
+  try{
+    const resp = await appsGet('availability', {}, { limit, days_ahead: daysAhead });
+    if(!resp?.ok || !Array.isArray(resp.slots)) return null;
+    session.slots = resp.slots;
+    return resp.slots;
+  } catch {
+    return null;
+  }
 }
 
 function formatSlots(lang, slots){
@@ -417,7 +388,7 @@ async function bookSlot({ session, slotIndex, from, profileName }){
 
   const resp = await appsGet('book', payload);
   if(!resp?.ok){
-    await logError(from, caseId, 'book_slot', resp?.error || 'unknown', { resp, payload });
+    await logError(from, caseId, 'book', resp?.error || 'unknown', { resp, payload });
     return resp || { ok:false, error:'book_failed' };
   }
 
@@ -425,7 +396,6 @@ async function bookSlot({ session, slotIndex, from, profileName }){
   session.appointment_end = resp.end_iso || s.end_iso || '';
   session.calendar_event_id = resp.event_id || '';
   session.status = 'Programado';
-
   return { ok:true, book: resp };
 }
 
@@ -494,7 +464,6 @@ const twilioHandler = async (req, res) => {
 
       session.service = svc;
       session.service_label = serviceLabel(svc, session.lang);
-
       await ensureCase(session);
 
       if(svc === 'calentador'){
@@ -536,17 +505,18 @@ const twilioHandler = async (req, res) => {
       session.status = session.status || 'En proceso';
 
       const leadResp = await pushLeadToScript({ session, from, profileName });
-      if(!leadResp?.ok){}
+      console.log('📌 lead:', session.case_id, leadResp?.ok ? 'OK' : `FAIL:${leadResp?.error || 'unknown'}`);
 
       if(session.step === 'lead_then_slots'){
         const slots = await listAvailability(session);
+        console.log('📌 availability:', session.case_id, slots?.length ? `OK:${slots.length}` : 'FAIL');
         session.step = 'pick_slot';
         await saveSession(key, session);
 
         if(!slots?.length){
           const msg = session.lang === 'en'
-            ? `⚠️ No slots available right now. We'll contact you shortly.\nCase: ${session.case_id}`
-            : `⚠️ No hay horarios disponibles ahora mismo. Te contactamos pronto.\nCaso: ${session.case_id}`;
+            ? `⚠️ No slots available. We'll contact you.\nCase: ${session.case_id}`
+            : `⚠️ No hay horarios disponibles. Te contactamos.\nCaso: ${session.case_id}`;
           return res.status(200).type('text/xml').send(twiml(msg));
         }
 
@@ -576,6 +546,7 @@ const twilioHandler = async (req, res) => {
       }
 
       const out = await bookSlot({ session, slotIndex: n - 1, from, profileName });
+      console.log('📌 book:', session.case_id, out?.ok ? 'OK' : `FAIL:${out?.error || 'unknown'}`);
 
       session.step = 'menu';
       session.slots = [];
@@ -583,9 +554,8 @@ const twilioHandler = async (req, res) => {
 
       if(!out?.ok){
         const errorMsg = session.lang === 'en'
-          ? `I couldn't book that slot. Try again from the menu or call ${PHONE}.\nCase: ${session.case_id}`
-          : `No pude reservar ese horario. Intenta nuevamente desde el menú o llama al ${PHONE}.\nCaso: ${session.case_id}`;
-        await logError(from, session.case_id, 'book_slot_ui', out?.error || 'unknown', out);
+          ? `I couldn't book that slot. Try again or call ${PHONE}.\nCase: ${session.case_id}`
+          : `No pude reservar ese horario. Intenta de nuevo o llama al ${PHONE}.\nCaso: ${session.case_id}`;
         return res.status(200).type('text/xml').send(twiml(errorMsg));
       }
 
@@ -600,7 +570,6 @@ const twilioHandler = async (req, res) => {
     await saveSession(key, session);
     return res.status(200).type('text/xml').send(twiml(mainMenuPretty(session.lang)));
   } catch(e){
-    try{ await logError(req.body?.From, null, 'twilio_handler', e?.message || String(e), { stack: e?.stack }); } catch {}
     return res.status(200).type('text/xml').send(twiml(''));
   }
 };
@@ -612,12 +581,17 @@ app.get('/', (req,res) => res.send('DestapesPR Bot activo ✅'));
 
 app.get('/health', async (req,res) => {
   try{
-    const scriptCheck = await appsGet('ready');
+    let scriptCheck = null;
+    let scriptErr = null;
+    try{ scriptCheck = await appsGet('ready'); } catch(err){ scriptErr = err?.message || String(err); }
     res.json({
       ok:true,
       tag: TAG,
       apps_script: scriptCheck?.ok ? 'connected' : 'error',
-      apps_script_version: scriptCheck?.version || 'unknown'
+      apps_script_version: scriptCheck?.version || null,
+      apps_script_url: APPS_SCRIPT_URL ? 'configured' : 'missing',
+      apps_script_token: APPS_SCRIPT_TOKEN ? 'configured' : 'missing',
+      apps_script_error: scriptErr
     });
   } catch(err){
     res.status(500).json({ ok:false, error: err?.message || String(err), tag: TAG });
