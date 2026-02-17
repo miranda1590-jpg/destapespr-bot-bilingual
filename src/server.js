@@ -16,11 +16,11 @@ const TAG = process.env.TAG || 'DestapesPR Bot 🇵🇷';
 const PHONE = process.env.PHONE || '+1 787-922-0068';
 const FB_LINK = process.env.FB_LINK || 'https://www.facebook.com/destapesPR/';
 
-const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || 'https://script.google.com/macros/s/AKfycbzu19t44BDuwNkq8AG39zKhdZFOwJk3o1e1HW2-KlzbAxB2_DB36UQPp3uKUjxKCyQ/exec';
+const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || '';
 const APPS_SCRIPT_TOKEN = process.env.APPS_SCRIPT_TOKEN || process.env.DESTAPESPR_TOKEN || '';
 
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
-const WELCOME_AFTER_MS = 12 * 60 * 60 * 1000;
+const WELCOME_TTL_MS = 12 * 60 * 60 * 1000;
 
 const MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 1000;
@@ -29,18 +29,328 @@ const FETCH_TIMEOUT_MS = 15000;
 let db;
 
 async function initDB() {
-  db = await open({ filename: './data.sqlite', driver: sqlite3.Database });
-  await db.exec('CREATE TABLE IF NOT EXISTS sessions ( k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER NOT NULL );');
-  await db.exec('CREATE TABLE IF NOT EXISTS error_log ( id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, from_number TEXT, case_id TEXT, action TEXT, error TEXT, details TEXT );');
-  console.log('✅ Database initialized');
+  if (db) return db;
+
+  db = await open({ filename: './sessions.db', driver: sqlite3.Database });
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS sessions (
+      from_number TEXT PRIMARY KEY,
+      lang TEXT DEFAULT 'es',
+      last_choice TEXT,
+      awaiting_heater INTEGER DEFAULT 0,
+      awaiting_details INTEGER DEFAULT 0,
+      awaiting_schedule INTEGER DEFAULT 0,
+      awaiting_slot INTEGER DEFAULT 0,
+      heater_type TEXT,
+      case_id TEXT,
+      details TEXT,
+      slots_json TEXT,
+      profile_name TEXT,
+      last_active INTEGER
+    );
+  `);
+
+  const cols = await db.all(`PRAGMA table_info(sessions);`);
+  const has = (n) => cols.some((c) => c.name === n);
+
+  if (!has('lang')) await db.exec(`ALTER TABLE sessions ADD COLUMN lang TEXT DEFAULT 'es';`);
+  if (!has('last_choice')) await db.exec(`ALTER TABLE sessions ADD COLUMN last_choice TEXT;`);
+  if (!has('awaiting_heater')) await db.exec(`ALTER TABLE sessions ADD COLUMN awaiting_heater INTEGER DEFAULT 0;`);
+  if (!has('awaiting_details')) await db.exec(`ALTER TABLE sessions ADD COLUMN awaiting_details INTEGER DEFAULT 0;`);
+  if (!has('awaiting_schedule')) await db.exec(`ALTER TABLE sessions ADD COLUMN awaiting_schedule INTEGER DEFAULT 0;`);
+  if (!has('awaiting_slot')) await db.exec(`ALTER TABLE sessions ADD COLUMN awaiting_slot INTEGER DEFAULT 0;`);
+  if (!has('heater_type')) await db.exec(`ALTER TABLE sessions ADD COLUMN heater_type TEXT;`);
+  if (!has('case_id')) await db.exec(`ALTER TABLE sessions ADD COLUMN case_id TEXT;`);
+  if (!has('details')) await db.exec(`ALTER TABLE sessions ADD COLUMN details TEXT;`);
+  if (!has('slots_json')) await db.exec(`ALTER TABLE sessions ADD COLUMN slots_json TEXT;`);
+  if (!has('profile_name')) await db.exec(`ALTER TABLE sessions ADD COLUMN profile_name TEXT;`);
+  if (!has('last_active')) await db.exec(`ALTER TABLE sessions ADD COLUMN last_active INTEGER;`);
+
+  await db.run('DELETE FROM sessions WHERE last_active < ?', Date.now() - SESSION_TTL_MS);
+  return db;
 }
 
-function nowMs() { return Date.now(); }
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+async function getSession(from) {
+  return db.get('SELECT * FROM sessions WHERE from_number = ?', from);
+}
+
+async function saveSession(from, patch = {}) {
+  const prev = (await getSession(from)) || {};
+  const now = Date.now();
+
+  const next = {
+    lang: patch.lang ?? prev.lang ?? 'es',
+    last_choice: patch.last_choice ?? prev.last_choice ?? null,
+    awaiting_heater: patch.awaiting_heater ?? prev.awaiting_heater ?? 0,
+    awaiting_details: patch.awaiting_details ?? prev.awaiting_details ?? 0,
+    awaiting_schedule: patch.awaiting_schedule ?? prev.awaiting_schedule ?? 0,
+    awaiting_slot: patch.awaiting_slot ?? prev.awaiting_slot ?? 0,
+    heater_type: patch.heater_type ?? prev.heater_type ?? null,
+    case_id: patch.case_id ?? prev.case_id ?? null,
+    details: patch.details ?? prev.details ?? null,
+    slots_json: patch.slots_json ?? prev.slots_json ?? null,
+    profile_name: patch.profile_name ?? prev.profile_name ?? null,
+    last_active: now,
+  };
+
+  await db.run(
+    `
+    INSERT INTO sessions (
+      from_number, lang, last_choice, awaiting_heater, awaiting_details,
+      awaiting_schedule, awaiting_slot, heater_type, case_id, details, slots_json, profile_name, last_active
+    )
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(from_number) DO UPDATE SET
+      lang = excluded.lang,
+      last_choice = excluded.last_choice,
+      awaiting_heater = excluded.awaiting_heater,
+      awaiting_details = excluded.awaiting_details,
+      awaiting_schedule = excluded.awaiting_schedule,
+      awaiting_slot = excluded.awaiting_slot,
+      heater_type = excluded.heater_type,
+      case_id = excluded.case_id,
+      details = excluded.details,
+      slots_json = excluded.slots_json,
+      profile_name = excluded.profile_name,
+      last_active = excluded.last_active
+    `,
+    [
+      from,
+      next.lang,
+      next.last_choice,
+      next.awaiting_heater,
+      next.awaiting_details,
+      next.awaiting_schedule,
+      next.awaiting_slot,
+      next.heater_type,
+      next.case_id,
+      next.details,
+      next.slots_json,
+      next.profile_name,
+      next.last_active,
+    ]
+  );
+
+  return next;
+}
+
+function clean(s) { return String(s || '').trim(); }
+
+function norm(str) {
+  return String(str || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/\p{Diacritic}/gu, '');
+}
+
+const EN_HINTS = ['drain','unclog','clogged','leak','camera','inspection','heater','appointment','schedule','water','toilet','sink','solar'];
+const ES_HINTS = ['destape','tapon','tapada','fuga','goteo','camara','cita','calentador','inodoro','fregadero','banera','bañera','solar'];
+
+function detectLanguage(bodyRaw, previousLang = 'es') {
+  const txt = norm(bodyRaw);
+  if (/\benglish\b/.test(txt) || /\bingles\b/.test(txt) || /\bingl[eé]s\b/.test(txt)) return 'en';
+  if (/\bespanol\b/.test(txt) || /\bespa[ñn]ol\b/.test(txt) || /\bspanish\b/.test(txt)) return 'es';
+  let enScore = 0, esScore = 0;
+  for (const w of EN_HINTS) if (txt.includes(w)) enScore++;
+  for (const w of ES_HINTS) if (txt.includes(w)) esScore++;
+  if (enScore > esScore && enScore > 0) return 'en';
+  if (esScore > enScore && esScore > 0) return 'es';
+  return previousLang || 'es';
+}
+
+const SERVICE_KEYS = ['destape','fuga','camara','calentador','otro','cita'];
+
+const SERVICE_KEYWORDS = {
+  destape: ['destape','destapar','tapon','tapada','tapado','obstruccion','drenaje','desague','fregadero','lavaplatos','inodoro','toilet','ducha','lavamanos','banera','principal','linea principal','drain','unclog','clogged','sewer'],
+  fuga: ['fuga','goteo','goteando','salidero','humedad','filtracion','leak','leaking','moisture'],
+  camara: ['camara','video inspeccion','inspeccion','inspection','camera inspection','sewer camera'],
+  calentador: ['calentador','boiler','heater','water heater','gas','electrico','electric','hot water','agua caliente','solar','calentador solar','solar heater'],
+  otro: ['otro','otros','servicio','consulta','presupuesto','cotizacion','other','plumbing','problem'],
+  cita: ['cita','appointment','schedule','agendar','reservar']
+};
+
+function matchService(bodyRaw) {
+  const txt = norm(bodyRaw);
+  const mapNums = { '1':'destape','2':'fuga','3':'camara','4':'calentador','5':'otro','6':'cita' };
+  if (mapNums[txt]) return mapNums[txt];
+  for (const key of SERVICE_KEYS) {
+    const list = SERVICE_KEYWORDS[key];
+    if (list.some(w => txt.includes(w))) return key;
+  }
+  return null;
+}
+
+function serviceName(service, lang) {
+  const names = {
+    destape: { es:'Destape', en:'Drain cleaning' },
+    fuga: { es:'Fuga de agua', en:'Water leak' },
+    camara: { es:'Inspección con cámara', en:'Camera inspection' },
+    calentador: { es:'Calentador (gas/eléctrico/solar)', en:'Water heater (gas/electric/solar)' },
+    otro: { es:'Otro servicio de plomería', en:'Other plumbing service' },
+    cita: { es:'Cita / coordinar visita', en:'Appointment' },
+  };
+  return (names[service] || names.otro)[lang === 'en' ? 'en' : 'es'];
+}
+
+function mainMenu(lang) {
+  if (lang === 'en') {
+    return (
+      `👋 Welcome to DestapesPR.\n\n` +
+      `Choose a number or type what you need:\n\n` +
+      `1️⃣ Drain cleaning (clogged drains/pipes)\n` +
+      `2️⃣ Leak (water leaks / dampness)\n` +
+      `3️⃣ Camera inspection (video)\n` +
+      `4️⃣ Water heater (gas/electric/solar)\n` +
+      `5️⃣ Other plumbing service\n` +
+      `6️⃣ Appointment / schedule a visit\n\n` +
+      `💬 Commands:\n` +
+      `Type "start", "menu" or "back" to return here.\n` +
+      `Type "english" or "español / espanol" to change language.\n\n` +
+      `📞 Phone: ${PHONE}\n` +
+      `📘 Facebook: ${FB_LINK}`
+    );
+  }
+  return (
+    `👋 Bienvenido a DestapesPR.\n\n` +
+    `Selecciona un número o escribe lo que necesitas:\n\n` +
+    `1️⃣ Destape (drenajes o tuberías tapadas)\n` +
+    `2️⃣ Fuga de agua (goteos / filtraciones)\n` +
+    `3️⃣ Inspección con cámara (video)\n` +
+    `4️⃣ Calentador (gas/eléctrico/solar)\n` +
+    `5️⃣ Otro servicio de plomería\n` +
+    `6️⃣ Cita / coordinar visita\n\n` +
+    `💬 Comandos:\n` +
+    `Escribe "inicio", "menu" o "volver" para regresar aquí.\n` +
+    `Escribe "english" o "español / espanol" para cambiar el idioma.\n\n` +
+    `📞 Teléfono: ${PHONE}\n` +
+    `📘 Facebook: ${FB_LINK}`
+  );
+}
+
+function heaterMenu(lang) {
+  if (lang === 'en') {
+    return (
+      `✅ Selected: Water heater (gas/electric/solar)\n\n` +
+      `Before details, choose heater type:\n` +
+      `1️⃣ Solar\n` +
+      `2️⃣ Conventional (gas/electric)\n\n` +
+      `Reply with 1 or 2.`
+    );
+  }
+  return (
+    `✅ Servicio: Calentador (gas/eléctrico/solar)\n\n` +
+    `Antes de los detalles, elige tipo:\n` +
+    `1️⃣ Solar\n` +
+    `2️⃣ Convencional (gas/eléctrico)\n\n` +
+    `Responde con 1 o 2.`
+  );
+}
+
+function servicePrompt(service, lang, heaterType) {
+  const baseEN =
+    `Please send everything in ONE message:\n` +
+    `• 🧑‍🎓 Full name\n` +
+    `• 📞 Contact number\n` +
+    `• 📍 City / area / sector\n` +
+    `• 📝 Short description\n\n`;
+
+  const baseES =
+    `Por favor envía TODO en UN solo mensaje:\n` +
+    `• 🧑‍🎓 Nombre completo\n` +
+    `• 📞 Número de contacto\n` +
+    `• 📍 Municipio / zona / sector\n` +
+    `• 📝 Descripción breve\n\n`;
+
+  const examplesEN = {
+    destape: `"I'm Ana Rivera, 939-555-9999, Caguas, kitchen sink clogged"`,
+    fuga: `"I'm Ana Rivera, 939-555-9999, Caguas, leak on bathroom ceiling"`,
+    camara: `"I'm Ana Rivera, 939-555-9999, Caguas, camera inspection main sewer line"`,
+    otro: `"I'm Ana Rivera, 939-555-9999, Caguas, need estimate for bathroom remodeling"`,
+    cita: `"I'm Ana Rivera, 939-555-9999, Caguas, prefer Mon–Wed 10am–1pm, kitchen sink clogged"`,
+    calentador: `"I'm Ana Rivera, 939-555-9999, Caguas, water heater not heating"`,
+  };
+
+  const examplesES = {
+    destape: `"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"`,
+    fuga: `"Me llamo Ana Rivera, 939-555-9999, Caguas, fuga en el techo del baño"`,
+    camara: `"Me llamo Ana Rivera, 939-555-9999, Caguas, inspección con cámara en la línea principal"`,
+    otro: `"Me llamo Ana Rivera, 939-555-9999, Caguas, necesito estimado para remodelación de baño"`,
+    cita: `"Me llamo Ana Rivera, 939-555-9999, Caguas, prefiero lunes a miércoles 10am–1pm, fregadero tapado"`,
+    calentador: `"Me llamo Ana Rivera, 939-555-9999, Caguas, calentador no calienta"`,
+  };
+
+  if (service === 'calentador') {
+    const typeLine = heaterType ? (lang === 'en' ? `✅ Heater type: ${heaterType}\n\n` : `✅ Tipo: ${heaterType}\n\n`) : '';
+    if (lang === 'en') return `✅ Selected: Water heater (gas/electric/solar)\n\n${typeLine}${baseEN}Example:\n${examplesEN.calentador}`;
+    return `✅ Servicio: Calentador (gas/eléctrico/solar)\n\n${typeLine}${baseES}Ejemplo:\n${examplesES.calentador}`;
+  }
+
+  if (lang === 'en') return `✅ Selected: ${serviceName(service, lang)}\n\n${baseEN}Example:\n${examplesEN[service] || examplesEN.otro}`;
+  return `✅ Servicio: ${serviceName(service, lang)}\n\n${baseES}Ejemplo:\n${examplesES[service] || examplesES.otro}`;
+}
+
+function askSchedule(lang) {
+  if (lang === 'en') {
+    return (
+      `📅 Would you like to schedule an appointment now?\n\n` +
+      `Reply:\n` +
+      `✅ YES = show available slots\n` +
+      `❌ NO = finish without booking\n\n` +
+      `You can also type "menu".`
+    );
+  }
+  return (
+    `📅 ¿Quieres agendar una cita ahora?\n\n` +
+    `Responde:\n` +
+    `✅ SI = ver horarios disponibles\n` +
+    `❌ NO = finalizar sin cita\n\n` +
+    `También puedes escribir "menu".`
+  );
+}
+
+function formatSlots(slots, lang) {
+  const lines = [];
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i];
+    const label = lang === 'en' ? s.slot_en : s.slot_es;
+    lines.push(`${i + 1}️⃣ ${s.ymd} — ${label}`);
+  }
+  if (lang === 'en') return `✅ Available slots:\n\n${lines.join('\n')}\n\nReply with the number (1-${slots.length}) or type "menu".`;
+  return `✅ Horarios disponibles:\n\n${lines.join('\n')}\n\nResponde con el número (1-${slots.length}) o escribe "menu".`;
+}
+
+function makeCaseId() {
+  const d = new Date();
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(d.getUTCDate()).padStart(2, '0');
+  const rnd = String(Math.floor(1000 + Math.random() * 9000));
+  return `DP-${y}${m}${day}-${rnd}`;
+}
+
+function sendTwilioXML(res, text) {
+  const safe = String(text || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+  const xml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${safe}</Message></Response>`;
+  res.set('Content-Type', 'application/xml');
+  return res.status(200).send(xml);
+}
 
 function b64url(obj) {
   const s = JSON.stringify(obj);
-  return Buffer.from(s, 'utf8').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+  return Buffer.from(s, 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
 async function fetchTextWithTimeout(url) {
@@ -56,13 +366,13 @@ async function fetchTextWithTimeout(url) {
 }
 
 async function appsGet(action, payload = {}, extraQuery = {}) {
-  if (!APPS_SCRIPT_URL) throw new Error('missing APPS_SCRIPT_URL');
+  if (!APPS_SCRIPT_URL) throw new Error('missing_APPS_SCRIPT_URL');
 
   const qs = new URLSearchParams();
   qs.set('action', String(action || '').trim());
 
   if (action !== 'ready') {
-    if (!APPS_SCRIPT_TOKEN) throw new Error('missing APPS_SCRIPT_TOKEN');
+    if (!APPS_SCRIPT_TOKEN) throw new Error('missing_APPS_SCRIPT_TOKEN');
     qs.set('token', APPS_SCRIPT_TOKEN);
   }
 
@@ -82,18 +392,27 @@ async function appsGet(action, payload = {}, extraQuery = {}) {
       try {
         json = JSON.parse(text);
       } catch {
-        if (attempt < MAX_RETRIES) { await sleep(RETRY_DELAY_MS * attempt); continue; }
+        if (attempt < MAX_RETRIES) {
+          await sleep(RETRY_DELAY_MS * attempt);
+          continue;
+        }
         return { ok: false, error: 'non_json_response', status, raw: text.slice(0, 500) };
       }
 
       if (json?.ok === true) return json;
       if (json?.error === 'unauthorized') return json;
 
-      if (attempt < MAX_RETRIES) { await sleep(RETRY_DELAY_MS * attempt); continue; }
+      if (attempt < MAX_RETRIES) {
+        await sleep(RETRY_DELAY_MS * attempt);
+        continue;
+      }
       return json || { ok: false, error: 'unknown' };
     } catch (err) {
       const msg = err?.name === 'AbortError' ? 'timeout' : String(err?.message || err);
-      if (attempt < MAX_RETRIES) { await sleep(RETRY_DELAY_MS * attempt); continue; }
+      if (attempt < MAX_RETRIES) {
+        await sleep(RETRY_DELAY_MS * attempt);
+        continue;
+      }
       return { ok: false, error: 'fetch_failed', details: msg };
     }
   }
@@ -101,18 +420,25 @@ async function appsGet(action, payload = {}, extraQuery = {}) {
   return { ok: false, error: 'max_retries_exceeded' };
 }
 
-async function logError(from, caseId, action, error, details) {
-  try {
-    await db.run(
-      'INSERT INTO error_log (timestamp, from_number, case_id, action, error, details) VALUES (?, ?, ?, ?, ?, ?)',
-      new Date().toISOString(),
-      from || '',
-      caseId || '',
-      action || '',
-      String(error || ''),
-      JSON.stringify(details || {})
-    );
-  } catch {}
+function extractPhone(text) {
+  const m = String(text || '').match(/(\+?1?\s*)?(\(?\d{3}\)?)[-\s.]?(\d{3})[-\s.]?(\d{4})/);
+  if (!m) return '';
+  const digits = (m[2] + m[3] + m[4]).replace(/\D/g, '');
+  return digits.length === 10 ? `+1${digits}` : '';
+}
+
+function extractName(text) {
+  const s = String(text || '').trim();
+  if (!s) return '';
+  const parts = s.split(',').map((x) => x.trim()).filter(Boolean);
+  if (parts.length >= 1) return parts[0].replace(/^"|"$/g, '').trim().replace(/^me llamo\s+/i, '').replace(/^i'?m\s+/i, '');
+  return '';
+}
+
+function extractCity(text) {
+  const parts = String(text || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (parts.length >= 3) return parts[2];
+  return '';
 }
 
 function normalizeFrom(from) {
@@ -123,239 +449,7 @@ function normalizeFrom(from) {
   return s;
 }
 
-function makeCaseId() {
-  const d = new Date();
-  const y = d.getUTCFullYear();
-  const m = String(d.getUTCMonth() + 1).padStart(2, '0');
-  const day = String(d.getUTCDate()).padStart(2, '0');
-  const rnd = String(Math.floor(1000 + Math.random() * 9000));
-  return `DP-${y}${m}${day}-${rnd}`;
-}
-
-async function loadSession(key) {
-  const row = await db.get('SELECT v, updated_at FROM sessions WHERE k=?', key);
-  if (!row) return null;
-  if (nowMs() - row.updated_at > SESSION_TTL_MS) {
-    await db.run('DELETE FROM sessions WHERE k=?', key);
-    return null;
-  }
-  try { return JSON.parse(row.v); } catch { return null; }
-}
-
-async function saveSession(key, obj) {
-  const v = JSON.stringify(obj || {});
-  const t = nowMs();
-  await db.run(
-    'INSERT INTO sessions(k,v,updated_at) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at',
-    key, v, t
-  );
-}
-
-function clean(s) { return String(s || '').trim(); }
-
-function parseInbound(req) {
-  const from = normalizeFrom(req.body.From);
-  const body = clean(req.body.Body);
-  const profileName = clean(req.body.ProfileName);
-  return { from, body, profileName };
-}
-
-function escapeXml(s) {
-  return String(s || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&apos;');
-}
-
-function twiml(msg) {
-  return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(msg)}</Message></Response>`;
-}
-
-function isHello(text) {
-  const t = clean(text).toLowerCase();
-  return ['hola','hello','hi','buenas','saludos','menu','start','inicio','back'].includes(t);
-}
-
-function menuText(lang) {
-  if (lang === 'en') {
-    return [
-      `${TAG}`,
-      `Choose an option:`,
-      `1) Clog / Drain (Destape)`,
-      `2) Leak / Plumbing repair`,
-      `3) Water heater (Calentador)`,
-      `4) Schedule an appointment`,
-      ``,
-      `Type: 1,2,3,4  |  Type "español" to switch`,
-      `Facebook: ${FB_LINK}`,
-      `Phone: ${PHONE}`
-    ].join('\n');
-  }
-  return [
-    `${TAG}`,
-    `Elige una opción:`,
-    `1) Destape / Drenaje`,
-    `2) Fuga / Reparación`,
-    `3) Calentador`,
-    `4) Agendar cita`,
-    ``,
-    `Escribe: 1,2,3,4  |  Escribe "english" para cambiar`,
-    `Facebook: ${FB_LINK}`,
-    `Tel: ${PHONE}`
-  ].join('\n');
-}
-
-function askLeadData(lang, serviceLabel) {
-  if (lang === 'en') {
-    return [
-      `Got it ✅ (${serviceLabel})`,
-      `Reply with ONE message like this:`,
-      `Name: John`,
-      `City: Caguas`,
-      `Phone: 7875551234`,
-      `Details: ...`
-    ].join('\n');
-  }
-  return [
-    `Perfecto ✅ (${serviceLabel})`,
-    `Contesta con UN solo mensaje así:`,
-    `Nombre: Juan`,
-    `Pueblo: Caguas`,
-    `Tel: 7875551234`,
-    `Detalles: ...`
-  ].join('\n');
-}
-
-function parseLeadMessage(text) {
-  const t = String(text || '');
-  const lines = t.split('\n').map((x) => x.trim()).filter(Boolean);
-  const out = { name: '', city: '', phone: '', details: '' };
-
-  for (const l of lines) {
-    const m1 = l.match(/^(nombre|name)\s*:\s*(.+)$/i);
-    if (m1) { out.name = clean(m1[2]); continue; }
-
-    const m2 = l.match(/^(pueblo|ciudad|city)\s*:\s*(.+)$/i);
-    if (m2) { out.city = clean(m2[2]); continue; }
-
-    const m3 = l.match(/^(tel|telefono|phone)\s*:\s*(.+)$/i);
-    if (m3) {
-      let phone = clean(m3[2]).replace(/[^\d+]/g, '');
-      if (phone && !phone.startsWith('+')) phone = '+1' + phone;
-      out.phone = phone;
-      continue;
-    }
-
-    const m4 = l.match(/^(detalles|details)\s*:\s*(.+)$/i);
-    if (m4) { out.details = clean(m4[2]); continue; }
-  }
-
-  if (!out.details) out.details = clean(lines.join(' '));
-
-  if (out.name.length > 100) out.name = out.name.slice(0, 100);
-  if (out.city.length > 50) out.city = out.city.slice(0, 50);
-  if (out.details.length > 500) out.details = out.details.slice(0, 500);
-
-  return out;
-}
-
-async function ensureCase(session) {
-  if (!session.case_id) session.case_id = makeCaseId();
-  return session.case_id;
-}
-
-async function pushLeadToScript({ session, from, profileName }) {
-  const caseId = await ensureCase(session);
-
-  const payload = {
-    case_id: caseId,
-    created_at: session.created_at || new Date().toISOString(),
-    from_number: from,
-    lang: session.lang || 'es',
-    service: session.service || '',
-    service_label: session.service_label || '',
-    heater_type: session.heater_type || 'N/A',
-    name: session.name || profileName || '',
-    phone: session.phone || '',
-    city: session.city || '',
-    details: session.details || '',
-    status: session.status || 'En proceso',
-    priority: session.priority || 'Normal',
-    membership: session.membership || 'NO',
-    tech_name: session.tech_name || '',
-    tech_whatsapp: session.tech_whatsapp || '',
-    appointment_start: session.appointment_start || '',
-    appointment_end: session.appointment_end || '',
-    calendar_event_id: session.calendar_event_id || ''
-  };
-
-  try {
-    const resp = await appsGet('lead', payload);
-    if (!resp?.ok) await logError(from, caseId, 'push_lead', resp?.error || 'unknown', resp);
-    return resp;
-  } catch (err) {
-    await logError(from, caseId, 'push_lead', err?.message || String(err), { stack: err?.stack });
-    return { ok: false, error: 'exception', details: err?.message || String(err) };
-  }
-}
-
-async function listAvailability(session) {
-  const resp = await appsGet('availability', {}, { limit: 6, days_ahead: 14 });
-  if (!resp?.ok || !Array.isArray(resp.slots)) return null;
-  session.slots = resp.slots;
-  session.slot_offer_at = new Date().toISOString();
-  return resp.slots;
-}
-
-function formatSlots(lang, slots) {
-  const lines = [];
-  lines.push(lang === 'en' ? 'Available slots:' : 'Horarios disponibles:');
-  for (let i = 0; i < slots.length; i++) {
-    const s = slots[i];
-    const label = lang === 'en' ? s.slot_en : s.slot_es;
-    lines.push(`${i + 1}) ${s.ymd} — ${label}`);
-  }
-  lines.push('');
-  lines.push(lang === 'en' ? `Reply with the number (1-${slots.length}) to book.` : `Contesta con el número (1-${slots.length}) para reservar.`);
-  return lines.join('\n');
-}
-
-async function bookSlot({ session, slotIndex, from, profileName }) {
-  const slots = Array.isArray(session.slots) ? session.slots : [];
-  const s = slots[slotIndex];
-  if (!s) return { ok: false, error: 'invalid_slot' };
-
-  const caseId = await ensureCase(session);
-
-  const payload = {
-    case_id: caseId,
-    name: session.name || profileName || 'Cliente',
-    phone: session.phone || '',
-    city: session.city || '',
-    from_number: from,
-    service_label: session.service_label || session.service || 'Cita',
-    details: session.details || '',
-    start_iso: s.start_iso,
-    end_iso: s.end_iso
-  };
-
-  const resp = await appsGet('book', payload);
-  if (!resp?.ok) {
-    await logError(from, caseId, 'book_slot', resp?.error || 'unknown', { resp, payload });
-    return resp || { ok: false, error: 'book_failed' };
-  }
-
-  session.appointment_start = resp.start_iso || s.start_iso || '';
-  session.appointment_end = resp.end_iso || s.end_iso || '';
-  session.calendar_event_id = resp.event_id || '';
-  session.status = 'Programado';
-
-  return { ok: true, book: resp };
-}
-
-app.get('/', (req, res) => res.status(200).send('DestapesPR Bot activo ✅'));
+app.get('/', (req, res) => res.send('DestapesPR Bot activo ✅'));
 
 app.get('/health', async (req, res) => {
   try {
@@ -364,167 +458,342 @@ app.get('/health', async (req, res) => {
       ok: true,
       tag: TAG,
       apps_script: scriptCheck?.ok ? 'connected' : 'error',
-      apps_script_version: scriptCheck?.version || 'unknown'
+      apps_script_version: scriptCheck?.version || 'unknown',
     });
   } catch (err) {
-    res.status(500).json({ ok: false, error: err?.message || String(err) });
+    res.status(500).json({ ok: false, error: String(err?.message || err), tag: TAG });
   }
 });
 
-app.post(["/twilio","/webhook/whatsapp"], async (req, res) => {
+app.post('/twilio', async (req, res) => {
   try {
-    const { from, body, profileName } = parseInbound(req);
-    if (!from) return res.status(200).type('text/xml').send(twiml(''));
+    await initDB();
 
-    const key = from;
-    const session = (await loadSession(key)) || {
-      lang: 'es',
-      step: 'menu',
-      created_at: new Date().toISOString(),
-      last_seen: nowMs()
-    };
+    const from = normalizeFrom(req.body.From || req.body.from || '');
+    const bodyRaw = String(req.body.Body || req.body.body || '');
+    const profileName = clean(req.body.ProfileName || req.body.profileName || '');
 
-    const idle = nowMs() - (session.last_seen || 0);
-    session.last_seen = nowMs();
+    if (!from) return sendTwilioXML(res, '');
 
-    const lower = clean(body).toLowerCase();
+    let session =
+      (await getSession(from)) || {
+        from_number: from,
+        lang: 'es',
+        last_choice: null,
+        awaiting_heater: 0,
+        awaiting_details: 0,
+        awaiting_schedule: 0,
+        awaiting_slot: 0,
+        heater_type: null,
+        case_id: null,
+        details: null,
+        slots_json: null,
+        profile_name: null,
+        last_active: 0,
+      };
 
-    if (lower === 'english') session.lang = 'en';
-    if (lower === 'español' || lower === 'espanol') session.lang = 'es';
+    const prevLast = Number(session.last_active || 0);
+    const now = Date.now();
+    const bodyNorm = norm(bodyRaw);
 
-    if (idle > WELCOME_AFTER_MS || isHello(body) || lower === 'menu' || lower === 'start' || lower === 'back') {
-      session.step = 'menu';
-      session.service = '';
-      session.service_label = '';
-      session.heater_type = 'N/A';
-      session.slots = [];
-      await saveSession(key, session);
-      return res.status(200).type('text/xml').send(twiml(menuText(session.lang)));
+    const isMenuCommand = ['inicio', 'menu', 'volver', 'start', 'back'].includes(bodyNorm);
+    const isHello = ['hola', 'hello', 'hi', 'hey', 'buenas', 'saludos'].some((k) => bodyNorm.includes(norm(k)));
+
+    const isLanguageCommand =
+      /\benglish\b/.test(bodyNorm) ||
+      /\bingles\b/.test(bodyNorm) ||
+      /\bingl[eé]s\b/.test(bodyNorm) ||
+      /\bespanol\b/.test(bodyNorm) ||
+      /\bespa[ñn]ol\b/.test(bodyNorm) ||
+      /\bspanish\b/.test(bodyNorm);
+
+    const newLang = detectLanguage(bodyRaw, session.lang || 'es');
+    if (newLang !== session.lang) session = await saveSession(from, { lang: newLang });
+
+    if (profileName) session = await saveSession(from, { profile_name: profileName });
+
+    const lang = session.lang || 'es';
+    const isInactive = prevLast > 0 && now - prevLast > WELCOME_TTL_MS;
+    const isFirstTime = prevLast === 0;
+
+    if (isFirstTime || isInactive) {
+      await saveSession(from, {
+        last_choice: null,
+        awaiting_heater: 0,
+        awaiting_details: 0,
+        awaiting_schedule: 0,
+        awaiting_slot: 0,
+        heater_type: null,
+        case_id: null,
+        details: null,
+        slots_json: null,
+      });
+
+      const greet =
+        lang === 'en'
+          ? isFirstTime
+            ? `👋 Welcome to DestapesPR!\n\n`
+            : `👋 Welcome back! We’re here to help.\n\n`
+          : isFirstTime
+            ? `👋 ¡Bienvenido a DestapesPR!\n\n`
+            : `👋 ¡Bienvenido de nuevo! Estamos listos para ayudarte.\n\n`;
+
+      return sendTwilioXML(res, greet + mainMenu(lang));
     }
 
-    if (session.step === 'menu') {
-      if (['1','2','3','4'].includes(lower)) {
-        if (lower === '1') { session.service = 'destape'; session.service_label = session.lang === 'en' ? 'Clog / Drain' : 'Destape / Drenaje'; session.step = 'lead'; }
-        if (lower === '2') { session.service = 'reparacion'; session.service_label = session.lang === 'en' ? 'Leak / Repair' : 'Fuga / Reparación'; session.step = 'lead'; }
-        if (lower === '3') { session.service = 'calentador'; session.service_label = 'Calentador'; session.step = 'heater_type'; }
-        if (lower === '4') { session.service = 'cita'; session.service_label = session.lang === 'en' ? 'Appointment' : 'Cita'; session.step = 'lead_then_slots'; }
-
-        await ensureCase(session);
-        await saveSession(key, session);
-
-        if (session.step === 'heater_type') {
-          const msg = session.lang === 'en'
-            ? 'Water heater type?\n1) Solar\n2) Conventional\n\nReply 1 or 2'
-            : '¿Tipo de calentador?\n1) Solar\n2) Convencional\n\nContesta 1 o 2';
-          return res.status(200).type('text/xml').send(twiml(msg));
-        }
-
-        return res.status(200).type('text/xml').send(twiml(askLeadData(session.lang, session.service_label)));
-      }
-
-      await saveSession(key, session);
-      return res.status(200).type('text/xml').send(twiml(menuText(session.lang)));
+    if (!bodyNorm || isMenuCommand || isHello) {
+      await saveSession(from, {
+        last_choice: null,
+        awaiting_heater: 0,
+        awaiting_details: 0,
+        awaiting_schedule: 0,
+        awaiting_slot: 0,
+        heater_type: null,
+        case_id: null,
+        details: null,
+        slots_json: null,
+      });
+      const reply = lang === 'en' ? `🔁 Main menu:\n\n${mainMenu(lang)}` : `🔁 Menú principal:\n\n${mainMenu(lang)}`;
+      return sendTwilioXML(res, reply);
     }
 
-    if (session.step === 'heater_type') {
-      if (lower === '1') session.heater_type = 'SOLAR';
-      else if (lower === '2') session.heater_type = 'Convencional';
-      else {
-        await saveSession(key, session);
-        const msg = session.lang === 'en' ? 'Reply 1 (Solar) or 2 (Conventional)' : 'Contesta 1 (Solar) o 2 (Convencional)';
-        return res.status(200).type('text/xml').send(twiml(msg));
-      }
-      session.step = 'lead';
-      await saveSession(key, session);
-      return res.status(200).type('text/xml').send(twiml(askLeadData(session.lang, session.service_label)));
+    if (isLanguageCommand) {
+      const confirm = newLang === 'en' ? `✅ Language set to English.\n\n` : `✅ Idioma establecido a español.\n\n`;
+      await saveSession(from, { lang: newLang });
+      return sendTwilioXML(res, confirm + mainMenu(newLang));
     }
 
-    if (session.step === 'lead' || session.step === 'lead_then_slots') {
-      const parsed = parseLeadMessage(body);
-      session.name = parsed.name || session.name || profileName || '';
-      session.city = parsed.city || session.city || '';
-      session.phone = parsed.phone || session.phone || '';
-      session.details = parsed.details || session.details || '';
-      session.status = session.status || 'En proceso';
-
-      const leadResp = await pushLeadToScript({ session, from, profileName });
-      if (!leadResp?.ok) {}
-
-      if (session.step === 'lead_then_slots') {
-        const slots = await listAvailability(session);
-        session.step = 'pick_slot';
-        await saveSession(key, session);
-
-        if (!slots?.length) {
-          const msg = session.lang === 'en'
-            ? `I couldn't find available slots right now. We'll contact you shortly.\nCase: ${session.case_id}`
-            : `No pude encontrar horarios disponibles ahora mismo. Te contactamos pronto.\nCaso: ${session.case_id}`;
-          return res.status(200).type('text/xml').send(twiml(msg));
-        }
-
-        return res.status(200).type('text/xml').send(twiml(formatSlots(session.lang, slots)));
+    if (Number(session.awaiting_heater) === 1 && session.last_choice === 'calentador') {
+      if (bodyNorm === '1') {
+        session = await saveSession(from, { heater_type: 'SOLAR', awaiting_heater: 0, awaiting_details: 1 });
+        return sendTwilioXML(res, (lang === 'en' ? `✅ Heater type: SOLAR\n\n` : `✅ Tipo: SOLAR\n\n`) + servicePrompt('calentador', lang, 'SOLAR'));
       }
-
-      session.step = 'menu';
-      await saveSession(key, session);
-
-      const msg = session.lang === 'en'
-        ? `Done ✅ Case: ${session.case_id}\nWe will contact you shortly.`
-        : `Listo ✅ Caso: ${session.case_id}\nTe estaremos contactando ahora.`;
-
-      return res.status(200).type('text/xml').send(twiml(msg));
+      if (bodyNorm === '2') {
+        session = await saveSession(from, { heater_type: 'Convencional', awaiting_heater: 0, awaiting_details: 1 });
+        return sendTwilioXML(res, (lang === 'en' ? `✅ Heater type: Conventional\n\n` : `✅ Tipo: Convencional\n\n`) + servicePrompt('calentador', lang, 'Convencional'));
+      }
+      return sendTwilioXML(res, heaterMenu(lang));
     }
 
-    if (session.step === 'pick_slot') {
-      const n = Number(lower);
-      const slots = Array.isArray(session.slots) ? session.slots : [];
-      if (!n || n < 1 || n > slots.length) {
-        await saveSession(key, session);
-        const msg = session.lang === 'en' ? `Reply with a number 1-${slots.length}.` : `Contesta con un número 1-${slots.length}.`;
-        return res.status(200).type('text/xml').send(twiml(msg));
+    if (Number(session.awaiting_slot) === 1 && session.slots_json) {
+      let slots = [];
+      try { slots = JSON.parse(session.slots_json || '[]'); } catch { slots = []; }
+
+      const pick = parseInt(bodyNorm, 10);
+      if (!pick || pick < 1 || pick > slots.length) {
+        return sendTwilioXML(
+          res,
+          lang === 'en'
+            ? `Please reply with a valid number (1-${slots.length}).\n\n${formatSlots(slots, lang)}`
+            : `Responde con un número válido (1-${slots.length}).\n\n${formatSlots(slots, lang)}`
+        );
       }
 
-      const out = await bookSlot({ session, slotIndex: n - 1, from, profileName });
-      session.step = 'menu';
-      session.slots = [];
-      await saveSession(key, session);
+      const chosen = slots[pick - 1];
+      const svc = session.last_choice || 'otro';
+      const heaterTypeToSend = svc === 'calentador' ? (session.heater_type || 'N/A') : 'N/A';
 
-      if (!out?.ok) {
-        const errorMsg = session.lang === 'en'
-          ? `I couldn't book that slot. Please try again from the menu or call us at ${PHONE}.\nCase: ${session.case_id}`
-          : `No pude reservar ese horario. Intenta nuevamente desde el menú o llámanos al ${PHONE}.\nCaso: ${session.case_id}`;
-        await logError(from, session.case_id, 'book_slot_ui', out?.error || 'unknown', out);
-        return res.status(200).type('text/xml').send(twiml(errorMsg));
+      const name = extractName(session.details || '') || session.profile_name || '';
+      const phone = extractPhone(session.details || '');
+      const city = extractCity(session.details || '');
+
+      const bookResp = await appsGet('book', {
+        case_id: session.case_id,
+        name: name || (lang === 'en' ? 'Client' : 'Cliente'),
+        phone: phone || '+1',
+        city: city || 'PR',
+        from_number: from,
+        service_label: serviceName(svc, lang),
+        details: session.details || '',
+        start_iso: chosen.start_iso,
+        end_iso: chosen.end_iso
+      });
+
+      const bookedOk = !!bookResp?.ok;
+
+      await appsGet('lead', {
+        case_id: session.case_id,
+        created_at: new Date().toISOString(),
+        from_number: from,
+        lang,
+        service: svc,
+        service_label: serviceName(svc, lang),
+        heater_type: heaterTypeToSend,
+        name: name || '',
+        phone: phone || '',
+        city: city || '',
+        details: session.details || '',
+        status: bookedOk ? 'Programado' : 'Nuevo'
+      });
+
+      await saveSession(from, {
+        awaiting_slot: 0,
+        awaiting_schedule: 0,
+        awaiting_details: 0,
+        awaiting_heater: 0,
+        last_choice: null,
+        heater_type: null,
+        details: null,
+        slots_json: null,
+        case_id: null
+      });
+
+      if (lang === 'en') {
+        let msg = `✅ Received.\n\nCase: ${session.case_id}\nService: ${serviceName(svc, lang)}\n`;
+        if (svc === 'calentador') msg += `Heater type: ${heaterTypeToSend}\n`;
+        msg += `\n`;
+        if (bookedOk) msg += `✅ Appointment booked:\n${chosen.ymd} — ${chosen.slot_en}\n\n`;
+        else msg += `⚠️ I couldn't book that slot. We'll contact you.\n\n`;
+        msg += `Type "menu" to return.`;
+        return sendTwilioXML(res, msg);
+      } else {
+        let msg = `✅ Recibido.\n\nCaso: ${session.case_id}\nServicio: ${serviceName(svc, lang)}\n`;
+        if (svc === 'calentador') msg += `Tipo de calentador: ${heaterTypeToSend}\n`;
+        msg += `\n`;
+        if (bookedOk) msg += `✅ Cita agendada:\n${chosen.ymd} — ${chosen.slot_es}\n\n`;
+        else msg += `⚠️ No pude reservar ese horario. Te contactamos.\n\n`;
+        msg += `Escribe "menu" para regresar.`;
+        return sendTwilioXML(res, msg);
       }
-
-      const msg = session.lang === 'en'
-        ? `Booked ✅\nCase: ${session.case_id}\nStart: ${session.appointment_start}\nEnd: ${session.appointment_end}`
-        : `Cita agendada ✅\nCaso: ${session.case_id}\nInicio: ${session.appointment_start}\nFin: ${session.appointment_end}`;
-
-      return res.status(200).type('text/xml').send(twiml(msg));
     }
 
-    session.step = 'menu';
-    await saveSession(key, session);
-    return res.status(200).type('text/xml').send(twiml(menuText(session.lang)));
-  } catch (e) {
-    try { await logError(req.body?.From, null, 'twilio_handler', e?.message || String(e), { stack: e?.stack }); } catch {}
-    return res.status(200).type('text/xml').send(twiml(''));
+    if (Number(session.awaiting_schedule) === 1 && session.case_id && session.last_choice && session.details) {
+      const yes = ['si','sí','yes','y','ok','dale'].includes(bodyNorm);
+      const no = ['no','n'].includes(bodyNorm);
+
+      if (!yes && !no) return sendTwilioXML(res, askSchedule(lang));
+
+      const svc = session.last_choice || 'otro';
+      const heaterTypeToSend = svc === 'calentador' ? (session.heater_type || 'N/A') : 'N/A';
+
+      const name = extractName(session.details || '') || session.profile_name || '';
+      const phone = extractPhone(session.details || '');
+      const city = extractCity(session.details || '');
+
+      if (no) {
+        await appsGet('lead', {
+          case_id: session.case_id,
+          created_at: new Date().toISOString(),
+          from_number: from,
+          lang,
+          service: svc,
+          service_label: serviceName(svc, lang),
+          heater_type: heaterTypeToSend,
+          name: name || '',
+          phone: phone || '',
+          city: city || '',
+          details: session.details || '',
+          status: 'Nuevo'
+        });
+
+        await saveSession(from, {
+          awaiting_schedule: 0,
+          awaiting_details: 0,
+          awaiting_heater: 0,
+          awaiting_slot: 0,
+          last_choice: null,
+          heater_type: null,
+          case_id: null,
+          details: null,
+          slots_json: null
+        });
+
+        const msg = lang === 'en'
+          ? `✅ Received. Saved.\nCase: ${session.case_id}\nService: ${serviceName(svc, lang)}\n\nType "menu" to return.`
+          : `✅ Recibido. Guardado.\nCaso: ${session.case_id}\nServicio: ${serviceName(svc, lang)}\n\nEscribe "menu" para regresar.`;
+        return sendTwilioXML(res, msg);
+      }
+
+      const avail = await appsGet('availability', {}, { limit: 6, days_ahead: 14 });
+      if (!avail?.ok || !Array.isArray(avail.slots) || avail.slots.length === 0) {
+        await appsGet('lead', {
+          case_id: session.case_id,
+          created_at: new Date().toISOString(),
+          from_number: from,
+          lang,
+          service: svc,
+          service_label: serviceName(svc, lang),
+          heater_type: heaterTypeToSend,
+          name: name || '',
+          phone: phone || '',
+          city: city || '',
+          details: session.details || '',
+          status: 'Nuevo'
+        });
+
+        await saveSession(from, {
+          awaiting_schedule: 0,
+          awaiting_details: 0,
+          awaiting_heater: 0,
+          awaiting_slot: 0,
+          last_choice: null,
+          heater_type: null,
+          case_id: null,
+          details: null,
+          slots_json: null
+        });
+
+        return sendTwilioXML(res, lang === 'en'
+          ? `⚠️ No slots available right now. We saved your info.\n\nType "menu" to return.`
+          : `⚠️ No hay horarios disponibles ahora mismo. Guardamos tu info.\n\nEscribe "menu" para regresar.`);
+      }
+
+      await saveSession(from, { awaiting_slot: 1, awaiting_schedule: 0, slots_json: JSON.stringify(avail.slots) });
+      return sendTwilioXML(res, formatSlots(avail.slots, lang));
+    }
+
+    if (Number(session.awaiting_details) === 1 && session.last_choice) {
+      const caseId = session.case_id || makeCaseId();
+      await saveSession(from, { awaiting_details: 0, awaiting_schedule: 1, details: bodyRaw, case_id: caseId });
+      return sendTwilioXML(res, askSchedule(lang));
+    }
+
+    const svc = matchService(bodyRaw);
+    if (svc) {
+      const caseId = makeCaseId();
+
+      if (svc === 'calentador') {
+        await saveSession(from, {
+          last_choice: 'calentador',
+          awaiting_heater: 1,
+          awaiting_details: 0,
+          awaiting_schedule: 0,
+          awaiting_slot: 0,
+          heater_type: null,
+          case_id: caseId,
+          details: null,
+          slots_json: null
+        });
+        return sendTwilioXML(res, heaterMenu(lang));
+      }
+
+      await saveSession(from, {
+        last_choice: svc,
+        awaiting_heater: 0,
+        awaiting_details: 1,
+        awaiting_schedule: 0,
+        awaiting_slot: 0,
+        heater_type: null,
+        case_id: caseId,
+        details: null,
+        slots_json: null
+      });
+
+      return sendTwilioXML(res, servicePrompt(svc, lang));
+    }
+
+    return sendTwilioXML(res, lang === 'en'
+      ? `I didn't understand your message.\n\n${mainMenu(lang)}`
+      : `No entendí tu mensaje.\n\n${mainMenu(lang)}`);
+  } catch {
+    return sendTwilioXML(res, '');
   }
 });
 
-initDB().then(() => {
-  app.listen(PORT, () => {
-    console.log(`✅ Server listening on port ${PORT}`);
-    console.log(`✅ TAG: ${TAG}`);
-    console.log(`✅ APPS_SCRIPT_URL: ${APPS_SCRIPT_URL ? 'configured' : '❌ MISSING'}`);
-    console.log(`✅ APPS_SCRIPT_TOKEN: ${APPS_SCRIPT_TOKEN ? 'configured' : '❌ MISSING'}`);
-  });
-}).catch(err => {
-  console.error('❌ Failed to initialize database:', err);
-  process.exit(1);
-});
-
-
-app.get("/webhook/whatsapp", (req,res)=>res.status(200).send("OK"));
-app.get("/twilio", (req,res)=>res.status(200).send("OK"));
+initDB()
+  .then(() => {
+    app.listen(PORT, () => {
+      console.log(`✅ ${TAG} listening on port ${PORT}`);
+    });
+  })
+  .catch(() => process.exit(1));
