@@ -465,7 +465,7 @@ app.get('/health', async (req, res) => {
   }
 });
 
-app.post('/twilio', async (req, res) => {
+const twilioHandler = async (req, res) => {
   try {
     await initDB();
 
