@@ -1,3 +1,4 @@
+cat > src/server.js <<'EOF'
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -19,6 +20,12 @@ const FB_LINK = process.env.FB_LINK || 'https://www.facebook.com/destapesPR/';
 const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || '';
 const APPS_SCRIPT_TOKEN = process.env.APPS_SCRIPT_TOKEN || process.env.DESTAPESPR_TOKEN || '';
 
+const CALENDAR_ID =
+  process.env.CALENDAR_ID ||
+  '773043df61bbe2b3ae6a43bc99f00c14775f7d517e6307aac23ee3f5d55512b8@group.calendar.google.com';
+
+const TZ = process.env.TZ || 'America/Puerto_Rico';
+
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
 const WELCOME_AFTER_MS = 12 * 60 * 60 * 1000;
 
@@ -30,6 +37,12 @@ let db;
 
 async function initDB() {
   db = await open({ filename: './data.sqlite', driver: sqlite3.Database });
+
+  await db.exec(`
+    PRAGMA journal_mode=WAL;
+    PRAGMA synchronous=NORMAL;
+  `);
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       k TEXT PRIMARY KEY,
@@ -37,6 +50,7 @@ async function initDB() {
       updated_at INTEGER NOT NULL
     );
   `);
+
   await db.exec(`
     CREATE TABLE IF NOT EXISTS error_log (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -48,19 +62,24 @@ async function initDB() {
       details TEXT
     );
   `);
+
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS booked_slots (
+      slot_key TEXT PRIMARY KEY,
+      start_iso TEXT NOT NULL,
+      end_iso TEXT NOT NULL,
+      case_id TEXT,
+      service_label TEXT,
+      from_number TEXT,
+      created_at TEXT NOT NULL,
+      calendar_event_id TEXT
+    );
+  `);
 }
 
-function nowMs() {
-  return Date.now();
-}
-
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-function clean(s) {
-  return String(s || '').trim();
-}
+function nowMs() { return Date.now(); }
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+function clean(s) { return String(s || '').trim(); }
 
 function normalizeFrom(from) {
   const s = String(from || '').trim();
@@ -97,6 +116,41 @@ function b64url(obj) {
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/g, '');
+}
+
+function slotKey(startIso, endIso) {
+  return `${startIso}__${endIso}`;
+}
+
+async function isSlotBooked(startIso, endIso) {
+  const k = slotKey(startIso, endIso);
+  const row = await db.get('SELECT slot_key FROM booked_slots WHERE slot_key=?', k);
+  return !!row;
+}
+
+async function markSlotBooked({ startIso, endIso, caseId, serviceLabel, fromNumber, eventId }) {
+  const k = slotKey(startIso, endIso);
+  await db.run(
+    `INSERT OR IGNORE INTO booked_slots(slot_key,start_iso,end_iso,case_id,service_label,from_number,created_at,calendar_event_id)
+     VALUES(?,?,?,?,?,?,?,?)`,
+    k,
+    startIso,
+    endIso,
+    caseId || '',
+    serviceLabel || '',
+    fromNumber || '',
+    new Date().toISOString(),
+    eventId || ''
+  );
+}
+
+async function filterBookedSlots(slots) {
+  if (!Array.isArray(slots) || !slots.length) return [];
+  const keys = slots.map((s) => slotKey(s.start_iso, s.end_iso));
+  const placeholders = keys.map(() => '?').join(',');
+  const rows = await db.all(`SELECT slot_key FROM booked_slots WHERE slot_key IN (${placeholders})`, ...keys);
+  const set = new Set(rows.map((r) => r.slot_key));
+  return slots.filter((s) => !set.has(slotKey(s.start_iso, s.end_iso)));
 }
 
 async function fetchTextWithTimeout(url) {
@@ -137,27 +191,18 @@ async function appsGet(action, payload = {}, extraQuery = {}) {
       try {
         json = JSON.parse(text);
       } catch {
-        if (attempt < MAX_RETRIES) {
-          await sleep(RETRY_DELAY_MS * attempt);
-          continue;
-        }
+        if (attempt < MAX_RETRIES) { await sleep(RETRY_DELAY_MS * attempt); continue; }
         return { ok: false, error: 'non_json_response', status, raw: text.slice(0, 500) };
       }
 
       if (json?.ok === true) return json;
       if (json?.error === 'unauthorized') return json;
 
-      if (attempt < MAX_RETRIES) {
-        await sleep(RETRY_DELAY_MS * attempt);
-        continue;
-      }
+      if (attempt < MAX_RETRIES) { await sleep(RETRY_DELAY_MS * attempt); continue; }
       return json || { ok: false, error: 'unknown' };
     } catch (err) {
       const msg = err?.name === 'AbortError' ? 'timeout' : String(err?.message || err);
-      if (attempt < MAX_RETRIES) {
-        await sleep(RETRY_DELAY_MS * attempt);
-        continue;
-      }
+      if (attempt < MAX_RETRIES) { await sleep(RETRY_DELAY_MS * attempt); continue; }
       return { ok: false, error: 'fetch_failed', details: msg };
     }
   }
@@ -195,11 +240,7 @@ async function loadSession(key) {
     await db.run('DELETE FROM sessions WHERE k=?', key);
     return null;
   }
-  try {
-    return JSON.parse(row.v);
-  } catch {
-    return null;
-  }
+  try { return JSON.parse(row.v); } catch { return null; }
 }
 
 async function saveSession(key, obj) {
@@ -207,9 +248,7 @@ async function saveSession(key, obj) {
   const t = nowMs();
   await db.run(
     'INSERT INTO sessions(k,v,updated_at) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at',
-    key,
-    v,
-    t
+    key, v, t
   );
 }
 
@@ -224,18 +263,15 @@ function norm(s) {
 function isHello(text) {
   const t = norm(text);
   return (
-    t === 'hola' ||
-    t === 'hello' ||
-    t === 'hi' ||
-    t === 'hey' ||
-    t === 'menu' ||
-    t === 'start' ||
-    t === 'inicio' ||
-    t === 'back' ||
-    t === 'volver' ||
-    t === 'buenas' ||
-    t === 'saludos'
+    t === 'hola' || t === 'hello' || t === 'hi' || t === 'hey' ||
+    t === 'menu' || t === 'start' || t === 'inicio' ||
+    t === 'back' || t === 'volver' || t === 'buenas' || t === 'saludos'
   );
+}
+
+function hasEmergency(text) {
+  const t = norm(text);
+  return t.includes('emergencia') || t.includes('emergency');
 }
 
 function menuText(lang) {
@@ -331,6 +367,8 @@ function leadPrompt(service, lang, heaterType) {
       `City: Caguas`,
       `Phone: 7875551234`,
       `Details: ...`,
+      ``,
+      `If it's an emergency, include "EMERGENCY".`
     ].filter(Boolean).join('\n');
   }
 
@@ -342,6 +380,8 @@ function leadPrompt(service, lang, heaterType) {
     `Pueblo: Caguas`,
     `Tel: 7875551234`,
     `Detalles: ...`,
+    ``,
+    `Si es emergencia, escribe "EMERGENCIA".`
   ].filter(Boolean).join('\n');
 }
 
@@ -353,6 +393,8 @@ function askSchedule(lang) {
       `Reply:`,
       `✅ YES = show available slots`,
       `❌ NO = finish without booking`,
+      ``,
+      `If it's an emergency, reply "EMERGENCY".`
     ].join('\n');
   }
   return [
@@ -361,6 +403,8 @@ function askSchedule(lang) {
     `Responde:`,
     `✅ SI = ver horarios disponibles`,
     `❌ NO = finalizar sin cita`,
+    ``,
+    `Si es emergencia, responde "EMERGENCIA".`
   ].join('\n');
 }
 
@@ -434,19 +478,33 @@ async function pushLeadToScript({ session, from, profileName, statusOverride }) 
     city: session.city || '',
     details: session.details || '',
     status: statusOverride || session.status || 'Nuevo',
+    appointment_start: session.appointment_start || '',
+    appointment_end: session.appointment_end || '',
+    calendar_event_id: session.calendar_event_id || ''
   };
 
-  const resp = await appsGet('lead', payload);
+  const resp = await appsGet('lead', payload, { tz: TZ, calendar_id: CALENDAR_ID });
   if (!resp?.ok) await logError(from, caseId, 'lead', resp?.error || 'unknown', resp);
   return resp;
 }
 
 async function listAvailability(session) {
-  const resp = await appsGet('availability', {}, { limit: 6, days_ahead: 14 });
+  const extra = {
+    limit: 6,
+    days_ahead: 14,
+    tz: TZ,
+    calendar_id: CALENDAR_ID,
+    exclude_booked: 1
+  };
+  if (session.emergency) extra.emergency = 1;
+
+  const resp = await appsGet('availability', {}, extra);
   if (!resp?.ok || !Array.isArray(resp.slots)) return null;
-  session.slots = resp.slots;
+
+  const filtered = await filterBookedSlots(resp.slots);
+  session.slots = filtered;
   session.slot_offer_at = new Date().toISOString();
-  return resp.slots;
+  return filtered;
 }
 
 async function bookSlot({ session, slotIndex, from, profileName }) {
@@ -455,37 +513,68 @@ async function bookSlot({ session, slotIndex, from, profileName }) {
   if (!s) return { ok: false, error: 'invalid_slot' };
 
   const caseId = await ensureCase(session);
+  const startIso = s.start_iso;
+  const endIso = s.end_iso;
 
-  const payload = {
-    case_id: caseId,
-    name: session.name || profileName || 'Cliente',
-    phone: session.phone || '',
-    city: session.city || '',
-    from_number: from,
-    service_label: session.service_label || serviceName(session.service || 'cita', session.lang || 'es'),
-    details: session.details || '',
-    start_iso: s.start_iso,
-    end_iso: s.end_iso,
-  };
+  await db.exec('BEGIN IMMEDIATE;');
+  try {
+    if (await isSlotBooked(startIso, endIso)) {
+      await db.exec('COMMIT;');
+      return { ok: false, error: 'slot_taken_local' };
+    }
 
-  const resp = await appsGet('book', payload);
-  if (!resp?.ok) {
-    await logError(from, caseId, 'book', resp?.error || 'unknown', { resp, payload });
-    return resp || { ok: false, error: 'book_failed' };
+    const payload = {
+      case_id: caseId,
+      name: session.name || profileName || 'Cliente',
+      phone: session.phone || '',
+      city: session.city || '',
+      from_number: from,
+      service_label: session.service_label || serviceName(session.service || 'cita', session.lang || 'es'),
+      details: session.details || '',
+      start_iso: startIso,
+      end_iso: endIso,
+      tz: TZ,
+      calendar_id: CALENDAR_ID
+    };
+
+    const resp = await appsGet('book', payload, { tz: TZ, calendar_id: CALENDAR_ID });
+
+    if (!resp?.ok) {
+      const code = String(resp?.error || 'book_failed');
+      await logError(from, caseId, 'book', code, { resp, payload });
+      await db.exec('ROLLBACK;');
+      return { ok: false, error: code, resp };
+    }
+
+    await markSlotBooked({
+      startIso,
+      endIso,
+      caseId,
+      serviceLabel: payload.service_label,
+      fromNumber: from,
+      eventId: resp.event_id || ''
+    });
+
+    await db.exec('COMMIT;');
+
+    session.appointment_start = resp.start_iso || startIso || '';
+    session.appointment_end = resp.end_iso || endIso || '';
+    session.calendar_event_id = resp.event_id || '';
+    session.status = 'Programado';
+
+    return { ok: true, book: resp };
+  } catch (e) {
+    try { await db.exec('ROLLBACK;'); } catch {}
+    await logError(from, caseId, 'book_tx_exception', e?.message || String(e), { stack: e?.stack });
+    return { ok: false, error: 'book_tx_exception' };
   }
-
-  session.appointment_start = resp.start_iso || s.start_iso || '';
-  session.appointment_end = resp.end_iso || s.end_iso || '';
-  session.calendar_event_id = resp.event_id || '';
-  session.status = 'Programado';
-
-  return { ok: true, book: resp };
 }
 
 function normalizeYesNo(t) {
   const s = norm(t);
   if (['si', 'sí', 's', 'yes', 'y', 'ok', 'dale'].includes(s)) return 'yes';
   if (['no', 'n'].includes(s)) return 'no';
+  if (hasEmergency(t)) return 'emergency';
   return '';
 }
 
@@ -518,6 +607,7 @@ const handler = async (req, res) => {
       phone: '',
       city: '',
       details: '',
+      emergency: false,
       slots: [],
       appointment_start: '',
       appointment_end: '',
@@ -543,6 +633,7 @@ const handler = async (req, res) => {
       session.phone = '';
       session.city = '';
       session.details = '';
+      session.emergency = false;
       session.slots = [];
       session.appointment_start = '';
       session.appointment_end = '';
@@ -566,6 +657,7 @@ const handler = async (req, res) => {
       session.phone = '';
       session.city = '';
       session.details = '';
+      session.emergency = false;
       session.slots = [];
       session.appointment_start = '';
       session.appointment_end = '';
@@ -603,6 +695,7 @@ const handler = async (req, res) => {
       session.city = parsed.city || session.city || '';
       session.phone = parsed.phone || session.phone || '';
       session.details = parsed.details || session.details || '';
+      session.emergency = session.emergency || hasEmergency(body) || hasEmergency(session.details);
       session.status = 'Nuevo';
 
       try {
@@ -651,6 +744,8 @@ const handler = async (req, res) => {
         return res.status(200).type('text/xml').send(twiml(msg));
       }
 
+      if (yn === 'emergency') session.emergency = true;
+
       const slots = await listAvailability(session);
       session.step = 'pick_slot';
       await saveSession(key, session);
@@ -671,6 +766,7 @@ const handler = async (req, res) => {
     if (session.step === 'pick_slot') {
       const slots = Array.isArray(session.slots) ? session.slots : [];
       const n = Number(String(body || '').trim());
+
       if (!n || n < 1 || n > slots.length) {
         await saveSession(key, session);
         const msg = session.lang === 'en'
@@ -682,13 +778,33 @@ const handler = async (req, res) => {
       const out = await bookSlot({ session, slotIndex: n - 1, from, profileName });
 
       if (!out?.ok) {
-        await logError(from, session.case_id, 'book_slot_ui', out?.error || 'unknown', out);
-        const errorMsg = session.lang === 'en'
-          ? `❌ I couldn't book that slot. Try again or call ${PHONE}.\nCase: ${session.case_id}`
-          : `❌ No pude reservar ese horario. Intenta otra vez o llámanos al ${PHONE}.\nCaso: ${session.case_id}`;
+        const code = String(out?.error || 'book_failed');
+        await logError(from, session.case_id, 'book_slot_ui', code, out);
+
+        const slots2 = await listAvailability(session);
         await saveSession(key, session);
-        return res.status(200).type('text/xml').send(twiml(errorMsg));
+
+        const hdr = session.lang === 'en'
+          ? `❌ I couldn't book that slot (reason: ${code}).`
+          : `❌ No pude reservar ese horario (razón: ${code}).`;
+
+        if (slots2?.length) {
+          const msg = session.lang === 'en'
+            ? `${hdr}\n\n✅ Updated available slots:\n\n${formatSlots(session.lang, slots2)}`
+            : `${hdr}\n\n✅ Horarios actualizados:\n\n${formatSlots(session.lang, slots2)}`;
+          return res.status(200).type('text/xml').send(twiml(msg));
+        }
+
+        const fallback = session.lang === 'en'
+          ? `${hdr}\nTry again or call ${PHONE}.\nCase: ${session.case_id}`
+          : `${hdr}\nIntenta otra vez o llámanos al ${PHONE}.\nCaso: ${session.case_id}`;
+        return res.status(200).type('text/xml').send(twiml(fallback));
       }
+
+      const chosen = slots[n - 1];
+      const slotLabel = session.lang === 'en' ? chosen.slot_en : chosen.slot_es;
+
+      session.status = 'Programado';
 
       try {
         await pushLeadToScript({ session, from, profileName, statusOverride: 'Programado' });
@@ -696,15 +812,13 @@ const handler = async (req, res) => {
         await logError(from, session.case_id, 'lead_after_book_exception', e?.message || String(e), { stack: e?.stack });
       }
 
-      const chosen = slots[n - 1];
-      const slotLabel = session.lang === 'en' ? chosen.slot_en : chosen.slot_es;
-
       const msg = session.lang === 'en'
         ? `✅ Appointment booked\n\nCase: ${session.case_id}\nService: ${session.service_label}\nWhen: ${chosen.ymd} — ${slotLabel}\n\nWe will contact you shortly.\nType "menu" to return.`
         : `✅ Cita agendada\n\nCaso: ${session.case_id}\nServicio: ${session.service_label}\nCuándo: ${chosen.ymd} — ${slotLabel}\n\nTe estaremos contactando.\nEscribe "menu" para regresar.`;
 
       session.step = 'menu';
       session.slots = [];
+      session.emergency = false;
       await saveSession(key, session);
       return res.status(200).type('text/xml').send(twiml(msg));
     }
@@ -713,9 +827,7 @@ const handler = async (req, res) => {
     await saveSession(key, session);
     return res.status(200).type('text/xml').send(twiml(menuText(session.lang)));
   } catch (e) {
-    try {
-      await logError(req.body?.From, null, 'handler_exception', e?.message || String(e), { stack: e?.stack });
-    } catch {}
+    try { await logError(req.body?.From, null, 'handler_exception', e?.message || String(e), { stack: e?.stack }); } catch {}
     return res.status(200).type('text/xml').send(twiml(''));
   }
 };
@@ -736,6 +848,8 @@ app.get('/health', async (req, res) => {
       apps_script_url: APPS_SCRIPT_URL ? 'configured' : 'missing',
       apps_script_token: APPS_SCRIPT_TOKEN ? 'configured' : 'missing',
       apps_script_error: out?.ok ? null : (out?.error || 'unknown'),
+      calendar_id: CALENDAR_ID,
+      tz: TZ
     });
   } catch (err) {
     res.json({
@@ -746,6 +860,8 @@ app.get('/health', async (req, res) => {
       apps_script_url: APPS_SCRIPT_URL ? 'configured' : 'missing',
       apps_script_token: APPS_SCRIPT_TOKEN ? 'configured' : 'missing',
       apps_script_error: err?.message || String(err),
+      calendar_id: CALENDAR_ID,
+      tz: TZ
     });
   }
 });
@@ -760,3 +876,4 @@ initDB()
     console.error(err);
     process.exit(1);
   });
+EOF
