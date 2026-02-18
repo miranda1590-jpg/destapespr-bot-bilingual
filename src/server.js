@@ -846,6 +846,16 @@ app.get('/__version', (req, res) => {
   });
 });
 
+app.get('/__version', (req, res) => {
+  res.json({
+    ok: true,
+    tag: process.env.TAG || 'DestapesPR Bot 🇵🇷',
+    commit: process.env.RENDER_GIT_COMMIT || null,
+    service: process.env.RENDER_SERVICE_NAME || null,
+    node: process.version
+  });
+});
+
 app.get('/health', async (req, res) => {
   try {
     const out = await appsGet('ready');
