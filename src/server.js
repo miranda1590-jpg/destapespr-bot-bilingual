@@ -1,4 +1,4 @@
-import import import 'dotenv/config';
+import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
 import sqlite3 from 'sqlite3';
@@ -20,7 +20,7 @@ const APPS_SCRIPT_URL = process.env.APPS_SCRIPT_URL || '';
 const APPS_SCRIPT_TOKEN = process.env.APPS_SCRIPT_TOKEN || process.env.DESTAPESPR_TOKEN || '';
 
 const CALENDAR_ID =
-  process.env.CALENDAR_ID ||
+ process.env.CALENDAR_ID ||
   '773043df61bbe2b3ae6a43bc99f00c14775f7d517e6307aac23ee3f5d55512b8@group.calendar.google.com';
 
 const TZ = process.env.TZ || 'America/Puerto_Rico';
