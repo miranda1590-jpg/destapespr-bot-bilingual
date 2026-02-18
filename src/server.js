@@ -374,7 +374,7 @@ function leadPrompt(service, lang, heaterType) {
   return [
     title,
     typeLine ? typeLine : null,
-    `Envía UN mensaje así:`,
+    `Por favor envía TODO en UN solo mensaje:`,
     `Nombre: Juan`,
     `Pueblo: Caguas`,
     `Tel: 7875551234`,
