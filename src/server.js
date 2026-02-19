@@ -374,11 +374,14 @@ function leadPrompt(service, lang, heaterType) {
   return [
     title,
     typeLine ? typeLine : null,
-    `Por favor envía TODO en UN solo mensaje:`,
-    `Nombre: Juan`,
-    `Pueblo: Caguas`,
-    `Tel: 7875551234`,
-    `Detalles: ...`,
+    `Por favor envía TODO en UN solo mensaje:`
+    `• 👨‍🔧 Nombre completo`,
+    `• 📞 Número de contacto`,
+    `• 📍 Municipio / zona / sector`,
+    `• 📝 Descripción breve`,
+    ``,
+    `Ejemplo (una sola línea):`,
+    `"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"`,
     ``,
     `Si es emergencia, escribe "EMERGENCIA".`
   ].filter(Boolean).join('\n');
