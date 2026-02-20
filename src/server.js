@@ -1,18 +1,3 @@
-¡Claro que sí! Para que no tengas que estar buscando línea por línea, aquí tienes el **código completo y actualizado**.
-
-Ya le integré el nuevo texto con el ejemplo exacto de "Ana Rivera" y los emojis tal cual me pediste en las capturas.
-
-### 🚀 Pasos para actualizarlo:
-
-1. Ve a tu repositorio en **GitHub** y abre el archivo **`index.js`**.
-2. Haz clic en el **Lápiz ✏️** para editar.
-3. **Borra TODO** el contenido que hay ahí.
-4. **Copia y pega** todo este bloque de código.
-5. Haz clic en el botón verde **Commit changes...** para guardar.
-
-Aquí tienes el código listo para la acción:
-
-```javascript
 /* DEPLOY_BUMP: auto */
 import 'dotenv/config';
 import express from 'express';
