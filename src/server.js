@@ -662,6 +662,7 @@ const handler = async (req, res) => {
       session.emergency = isEmergency(body) || session.emergency;
 
       const parsed = parseLeadMessage(body);
+if (isEmergency(body)) session.emergency = true;
       if (parsed.name) session.name = parsed.name;
       if (parsed.city) session.city = parsed.city;
       if (parsed.phone) session.phone = parsed.phone;
