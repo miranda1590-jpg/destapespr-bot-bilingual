@@ -1,4 +1,4 @@
-/* DEPLOY_BUMP: 20260220-065349 */
+/* DEPLOY_BUMP: 20260220-065539 */
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -584,6 +584,8 @@ const handler = async (req, res) => {
     session.last_seen = nowMs();
 
     const lower = norm(body);
+
+    if (isEmergency(body, session.lang)) session.emergency = true;
 
     if (lower === 'english') session.lang = 'en';
     if (lower === 'español' || lower === 'espanol') session.lang = 'es';
