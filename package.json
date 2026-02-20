@@ -2,9 +2,9 @@
   "name": "destapespr-bot-bilingual",
   "version": "29.0.1",
   "type": "module",
-  "main": "src/server.js",
+  "main": "index.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "dotenv": "^16.6.1",
