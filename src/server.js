@@ -1,4 +1,4 @@
-/* DEPLOY_BUMP: 20260220-065928 */
+/* DEPLOY_BUMP: 20260220-070129 */
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -448,8 +448,8 @@ function normalizeYesNo(t) {
 
 function isEmergency(text, lang) {
   const s = norm(text);
-  if (lang === 'en') return s.includes('emergency');
-  return s.includes('emergencia');
+  if (!s) return false;
+  return s.includes("emergencia") || s.includes("emergency");
 }
 
 function formatSlots(lang, slots) {
