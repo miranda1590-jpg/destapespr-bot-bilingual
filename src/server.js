@@ -453,6 +453,7 @@ function isEmergency(text) {
 }
 
 
+
 function formatSlots(lang, slots) {
   const lines = [];
   lines.push(lang === 'en' ? `✅ Available slots:` : `✅ Horarios disponibles:`);
