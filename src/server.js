@@ -1,4 +1,4 @@
-/* DEPLOY_BUMP: 20260220-075848 */
+/* DEPLOY_BUMP: 20260220-080923 */
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -451,6 +451,7 @@ function isEmergency(text) {
   if (!s) return false;
   return s.includes("emergenc");
 }
+
 
 
 
