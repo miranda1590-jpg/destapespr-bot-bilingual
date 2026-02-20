@@ -1,3 +1,18 @@
+¡Claro que sí! Para que no tengas que estar buscando línea por línea, aquí tienes el **código completo y actualizado**.
+
+Ya le integré el nuevo texto con el ejemplo exacto de "Ana Rivera" y los emojis tal cual me pediste en las capturas.
+
+### 🚀 Pasos para actualizarlo:
+
+1. Ve a tu repositorio en **GitHub** y abre el archivo **`index.js`**.
+2. Haz clic en el **Lápiz ✏️** para editar.
+3. **Borra TODO** el contenido que hay ahí.
+4. **Copia y pega** todo este bloque de código.
+5. Haz clic en el botón verde **Commit changes...** para guardar.
+
+Aquí tienes el código listo para la acción:
+
+```javascript
 /* DEPLOY_BUMP: auto */
 import 'dotenv/config';
 import express from 'express';
@@ -222,7 +237,7 @@ async function alertAdmin(type, session, from) {
   await sendWhatsApp(ADMIN_WHATSAPP, templates[type]());
 }
 
-// ─── DB HELPERS Y LOGICA SESION (Mantenida igual) ───────────────────────────
+// ─── DB HELPERS Y LOGICA SESION ───────────────────────────────────────────────
 
 async function logError(from, caseId, action, error, details) {
   try { await db.run('INSERT INTO error_log (timestamp, from_number, case_id, action, error, details) VALUES (?,?,?,?,?,?)', new Date().toISOString(), from || '', caseId || '', action || '', String(error || ''), JSON.stringify(details || {})); } catch {}
@@ -262,7 +277,27 @@ function serviceName(service, lang) { const names = { destape: { es: 'Destape', 
 function heaterMenu(lang) { return lang === 'en' ? `✅ Service: Water heater\n\nChoose heater type:\n1️⃣ Solar\n2️⃣ Conventional (gas/electric)\n\nReply with 1 or 2.` : `✅ Servicio: Calentador\n\nElige tipo:\n1️⃣ Solar\n2️⃣ Convencional (gas/eléctrico)\n\nResponde 1 o 2.`; }
 function isEmergency(text) { const s = norm(text); return (s.includes('emergenc') || s.includes('urgente') || s.includes('inund') || s.includes('revento') || s.includes('exploto') || s.includes('flooding') || s.includes('fuga grande') || s.includes('pipe burst')); }
 function stripEmergency(text) { return clean(String(text || '').replace(/\bemergencia\b/gi, '').replace(/\bemergency\b/gi, '').replace(/\burgente\b/gi, '').replace(/\s*,\s*,/g, ',').replace(/\s{2,}/g, ' ')); }
-function leadPrompt(service, lang, heaterType) { const title = lang === 'en' ? `✅ Service: ${serviceName(service, lang)}` : `✅ Servicio: ${serviceName(service, lang)}`; const typeLine = service === 'calentador' && heaterType ? (lang === 'en' ? `✅ Type: ${heaterType}` : `✅ Tipo: ${heaterType}`) : null; if (lang === 'en') return [title, typeLine, `\nPlease send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description\n\n🚨 Emergency? CALL NOW: ${PHONE}`].filter(Boolean).join('\n'); return [title, typeLine, `\nPor favor envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Teléfono\n• 📍 Municipio / sector\n• 📝 Descripción del problema\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`].filter(Boolean).join('\n'); }
+
+// LA FUNCIÓN NUEVA QUE PEDISTE:
+function leadPrompt(service, lang, heaterType) {
+  const title = lang === 'en' ? `✅ Service: ${serviceName(service, lang)}` : `✅ Servicio: ${serviceName(service, lang)}`;
+  const typeLine = service === 'calentador' && heaterType ? (lang === 'en' ? `✅ Type: ${heaterType}` : `✅ Tipo: ${heaterType}`) : null;
+  
+  if (lang === 'en') {
+    return [
+      title, 
+      typeLine, 
+      `\nPlease send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description of the problem\n\nExample:\n"My name is Ana Rivera, 939-555-9999, San Juan, clogged kitchen sink"\n\n🚨 Emergency? Call NOW for immediate assistance: ${PHONE}`
+    ].filter(Boolean).join('\n');
+  }
+
+  return [
+    title, 
+    typeLine, 
+    `\nPor favor envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Descripción breve del problema\n\nEjemplo:\n"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"\n\n🚨 ¿Emergencia? Llama AHORA para atención inmediata: ${PHONE}`
+  ].filter(Boolean).join('\n');
+}
+
 function askSchedule(lang) { return lang === 'en' ? `📅 Do you want to schedule an appointment now?\n\nReply YES or NO` : `📅 ¿Quieres agendar una cita ahora?\n\nResponde SI o NO`; }
 function emergencyCallText(lang, caseId) { return lang === 'en' ? `🚨 *Emergency detected*\n\nFor fastest assistance, CALL NOW: ${PHONE}\n${caseId ? `Case ID: ${caseId}` : ''}\n\nType "menu" to return.` : `🚨 *Emergencia detectada*\n\nPara atención inmediata, llama AHORA: ${PHONE}\n${caseId ? `Caso: ${caseId}` : ''}\n\nEscribe "menu" para regresar.`; }
 function formatSlots(lang, slots) { const lines = [lang === 'en' ? `📅 Available slots:` : `📅 Horarios disponibles:`, '']; for (let i = 0; i < slots.length; i++) { const label = lang === 'en' ? slots[i].slot_en : slots[i].slot_es; lines.push(`${i + 1}️⃣ ${slots[i].ymd} — ${label}`); } lines.push(''); lines.push(lang === 'en' ? `Reply with a number (1-${slots.length}) or type "menu" to cancel.` : `Responde con un número (1-${slots.length}) o escribe "menu" para cancelar.`); return lines.join('\n'); }
@@ -523,3 +558,5 @@ async function shutdown(signal) {
 process.on('SIGTERM', () => shutdown('SIGTERM')); process.on('SIGINT',  () => shutdown('SIGINT'));
 
 initDB().then(() => { server = app.listen(PORT, () => log('info', `${TAG} activo`)); }).catch(() => process.exit(1));
+
+```
