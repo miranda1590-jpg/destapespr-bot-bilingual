@@ -18,27 +18,24 @@ const PHONE                = process.env.BRAND_PHONE         || process.env.PHON
 const FB_LINK              = process.env.BRAND_FB            || 'https://www.facebook.com/DestapesPR';
 const APPS_SCRIPT_URL      = process.env.APPS_SCRIPT_URL     || '';
 const APPS_SCRIPT_TOKEN    = process.env.APPS_SCRIPT_TOKEN   || '';
-const ADMIN_WHATSAPP       = process.env.ADMIN_ALERT_TO      || '';
-const TWILIO_ACCOUNT_SID   = process.env.TWILIO_ACCOUNT_SID  || '';
 const TWILIO_AUTH_TOKEN    = process.env.TWILIO_AUTH_TOKEN   || '';
-const TWILIO_WHATSAPP_FROM = process.env.TWILIO_PHONE_NUMBER || '';
 
 const SESSION_TTL_MS   = 48 * 60 * 60 * 1000;
-const WELCOME_AFTER_MS = 12 * 60 * 60 * 1000;
 let db;
-
-// --- LOGGING & DB ---
-function log(level, msg, meta = {}) {
-  const ts = new Date().toISOString();
-  console.log(`[${ts}] ${level.toUpperCase()}: ${msg} ${JSON.stringify(meta)}`);
-}
 
 async function initDB() {
   db = await open({ filename: './data.sqlite', driver: sqlite3.Database });
   await db.exec(`CREATE TABLE IF NOT EXISTS sessions (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
 }
 
-// --- HELPERS BILINGÜES ---
+function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); }
+
+// Detección mejorada de saludos
+function isHello(text) {
+  const common = ['hola', 'hello', 'hi', 'hey', 'buenas', 'saludos', 'start', 'inicio', 'menu'];
+  return common.includes(norm(text));
+}
+
 function menuText(lang) {
   if (lang === 'en') {
     return `👋 Welcome to DestapesPR.\n\nChoose a number:\n1️⃣ Drain cleaning\n2️⃣ Water leak\n3️⃣ Camera inspection\n4️⃣ Water heater\n5️⃣ Other\n6️⃣ Appointment\n\n💬 Commands: "menu", "back"\n🌐 Type "español" for Spanish\n\n📘 Facebook: ${FB_LINK}\n📞 Phone: ${PHONE}`;
@@ -47,47 +44,34 @@ function menuText(lang) {
 }
 
 function leadPrompt(service, lang) {
-  const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga', en: 'Leak' }, camara: { es: 'Cámara', en: 'Camera' }, calentador: { es: 'Calentador', en: 'Heater' }, otro: { es: 'Otro', en: 'Other' }, cita: { es: 'Cita', en: 'Appointment' } };
-  const sName = names[service]?.[lang] || names['otro'][lang];
-  
+  const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga', en: 'Leak' }, camara: { es: 'Cámara', en: 'Camera' }, calentador: { es: 'Calentador', en: 'Heater' }, cita: { es: 'Cita', en: 'Appointment' } };
+  const sName = names[service]?.[lang] || (lang === 'en' ? 'Service' : 'Servicio');
   if (lang === 'en') {
-    return `✅ Service: ${sName}\nPlease send in ONE message:\n• 👤 Full name\n• 📞 Phone\n• 📍 City\n• 📝 Problem description\n\nExample: "My name is Ana Rivera, 939-555-9999, San Juan, clogged sink"\n\n🚨 Emergency? CALL NOW: ${PHONE}`;
+    return `✅ Service: ${sName}\nPlease send in ONE message:\n• 👤 Full name\n• 📞 Phone\n• 📍 City\n• 📝 Description\n\nExample: "My name is Ana Rivera, 939-555-9999, San Juan, clogged sink"`;
   }
-  return `✅ Servicio: ${sName}\nEnvía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Teléfono\n• 📍 Municipio\n• 📝 Descripción\n\nEjemplo: "Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero tapado"\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
-}
-
-function askSchedule(lang) {
-  return lang === 'en' ? `📅 Do you want to schedule an appointment now?\n\nReply YES or NO` : `📅 ¿Quieres agendar una cita ahora?\n\nResponde SI o NO`;
-}
-
-// --- COMUNICACIÓN CON GOOGLE ---
-async function appsPost(action, payload = {}, extra = {}) {
-  const body = JSON.stringify({ action, token: APPS_SCRIPT_TOKEN, p: payload, ...extra });
-  const res = await fetch(APPS_SCRIPT_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body });
-  return await res.json();
+  return `✅ Servicio: ${sName}\nEnvía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Teléfono\n• 📍 Municipio\n• 📝 Descripción\n\nEjemplo: "Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero tapado"`;
 }const handler = async (req, res) => {
   const from = req.body.From;
   const body = (req.body.Body || '').trim();
-  const lower = body.toLowerCase();
+  const lower = norm(body);
   
-  // Cargar sesión
   const key = from;
-  let session = (await db.get('SELECT v FROM sessions WHERE k=?', key));
-  session = session ? JSON.parse(session.v) : { lang: 'es', step: 'menu' };
+  let row = await db.get('SELECT v FROM sessions WHERE k=?', key);
+  let session = row ? JSON.parse(row.v) : { lang: 'es', step: 'menu' };
 
-  // Cambio de idioma dinámico
+  // Cambio de idioma y reconocimiento de saludos (hello, hi, etc.)
   if (lower.includes('english')) session.lang = 'en';
   if (lower.includes('español') || lower.includes('espanol')) session.lang = 'es';
 
-  // Volver al menú
-  if (['menu', 'inicio', 'hola', 'hi'].includes(lower)) {
+  // Si el mensaje es un saludo o comando de inicio, reiniciamos al menú
+  if (isHello(body)) {
     session.step = 'menu';
     await db.run('INSERT OR REPLACE INTO sessions (k, v, updated_at) VALUES (?, ?, ?)', key, JSON.stringify(session), Date.now());
-    return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${menuText(session.lang)}</Message></Response>`);
+    const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${menuText(session.lang)}</Message></Response>`;
+    return res.type('text/xml').send(twiml);
   }
 
   let responseMsg = "";
-
   if (session.step === 'menu') {
     const choices = { '1':'destape', '2':'fuga', '3':'camara', '4':'calentador', '5':'otro', '6':'cita' };
     if (choices[body]) {
@@ -97,27 +81,19 @@ async function appsPost(action, payload = {}, extra = {}) {
     } else {
       responseMsg = menuText(session.lang);
     }
-  } 
-  else if (session.step === 'lead') {
-    // Aquí el sistema procesa los datos de Ana Rivera o cualquier cliente
+  } else if (session.step === 'lead') {
+    // Procesa datos del cliente (ejemplo: Ana Rivera)
+    responseMsg = session.lang === 'en' ? "📅 Would you like to schedule now? (YES/NO)" : "📅 ¿Deseas agendar ahora? (SI/NO)";
     session.step = 'ask_schedule';
-    responseMsg = askSchedule(session.lang);
-  }
-  else if (session.step === 'ask_schedule') {
-    const isYes = ['si', 'sí', 'yes', 'y', 's'].includes(lower);
-    if (isYes) {
-      // Consultar disponibilidad y mostrar slots
-      responseMsg = session.lang === 'en' ? "📅 Checking available slots..." : "📅 Consultando horarios...";
-      // (Lógica de slots omitida por brevedad, pero usa session.lang para los textos)
-    } else {
-      responseMsg = session.lang === 'en' ? "✅ Thank you! We will contact you soon." : "✅ ¡Gracias! Te contactaremos pronto.";
-      session.step = 'menu';
-    }
+  } else {
+    responseMsg = menuText(session.lang);
+    session.step = 'menu';
   }
 
   await db.run('INSERT OR REPLACE INTO sessions (k, v, updated_at) VALUES (?, ?, ?)', key, JSON.stringify(session), Date.now());
-  res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${responseMsg}</Message></Response>`);
+  const finalTwiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${responseMsg}</Message></Response>`;
+  res.type('text/xml').send(finalTwiml);
 };
 
 app.post('/webhook/whatsapp', handler);
-initDB().then(() => app.listen(PORT, () => console.log(`${TAG} bilingüe activo en puerto ${PORT}`)));
+initDB().then(() => app.listen(PORT, () => console.log(`${TAG} corrigiendo "hello" activo en puerto ${PORT}`)));
