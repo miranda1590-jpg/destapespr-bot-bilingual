@@ -17,7 +17,7 @@ app.use(morgan('dev'));
 const PORT                 = process.env.PORT                || 10000;
 const TAG                  = process.env.TAG                 || 'DestapesPR Bot 🇵🇷';
 const PHONE                = process.env.BRAND_PHONE         || process.env.PHONE           || '+1 787-922-0068';
-const FB_LINK              = process.env.BRAND_FB            || process.env.FB_LINK          || 'https://www.facebook.com/destapesPR/';
+const FB_LINK              = process.env.BRAND_FB            || process.env.FB_LINK          || 'https://www.facebook.com/DestapesPR';
 const APPS_SCRIPT_URL      = process.env.APPS_SCRIPT_URL     || process.env.LEADS_WEBHOOK_URL || '';
 const APPS_SCRIPT_TOKEN    = process.env.APPS_SCRIPT_TOKEN   || process.env.LEADS_WEBHOOK_TOKEN || process.env.DESTAPESPR_TOKEN || '';
 const ADMIN_WHATSAPP       = process.env.ADMIN_ALERT_TO      || process.env.ADMIN_WHATSAPP   || '';
@@ -219,7 +219,14 @@ const normalizeYesNo = (t) => ['si','sí','s','yes','y','ok','dale','claro','sur
 const mapMenuChoiceToService = (c) => ({ '1':'destape','2':'fuga','3':'camara','4':'calentador','5':'otro','6':'cita' }[c] || '');
 
 function parseInbound(req) { return { from: normalizeFrom(req.body.From || req.body.from || req.body.WaId || ''), body: clean(req.body.Body || req.body.body || ''), profileName: clean(req.body.ProfileName || req.body.profileName || '') }; }
-function menuText(lang) { return lang === 'en' ? `👋 Welcome to DestapesPR.\n\nChoose a number or type what you need:\n1️⃣ Drain cleaning\n2️⃣ Leak\n3️⃣ Camera inspection\n4️⃣ Water heater\n5️⃣ Other plumbing service\n6️⃣ Appointment / schedule a visit\n\n💬 Commands: "start", "menu" or "back"\n🌐 Type "español" to switch language\n\n📞 Phone: ${PHONE}` : `👋 Bienvenido a DestapesPR.\n\nSelecciona un número o escribe lo que necesitas:\n1️⃣ Destape (drenajes o tuberías tapadas)\n2️⃣ Fuga de agua\n3️⃣ Inspección con cámara\n4️⃣ Calentador\n5️⃣ Otro servicio\n6️⃣ Cita / coordinar visita\n\n💬 Comandos: "inicio", "menu" o "volver"\n🌐 Escribe "english" para cambiar idioma\n\n📞 Tel: ${PHONE}`; }
+
+function menuText(lang) {
+  if (lang === 'en') {
+    return `👋 Welcome to DestapesPR.\n\nChoose a number or type what you need:\n1️⃣ Drain cleaning (clogged pipes)\n2️⃣ Water leak (drips / leaks)\n3️⃣ Camera inspection (video)\n4️⃣ Water heater (gas/electric/solar)\n5️⃣ Other plumbing service\n6️⃣ Appointment / schedule a visit\n\n💬 Commands: "start", "menu" or "back"\n🌐 Type "español" to switch language\n\n📘 Facebook: ${FB_LINK}\n📞 Phone: ${PHONE}`;
+  }
+  return `👋 Bienvenido a DestapesPR.\n\nSelecciona un número o escribe lo que necesitas:\n1️⃣ Destape (drenajes o tuberías tapadas)\n2️⃣ Fuga de agua (goteos / filtraciones)\n3️⃣ Inspección con cámara (video)\n4️⃣ Calentador (gas/eléctrico/solar)\n5️⃣ Otro servicio de plomería\n6️⃣ Cita / coordinar visita\n\n💬 Comandos: "inicio", "menu" o "volver"\n🌐 Escribe "english" para cambiar idioma\n\n📘 Facebook: ${FB_LINK}\n📞 Tel: ${PHONE}`;
+}
+
 function serviceName(service, lang) { const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, otro: { es: 'Otro servicio de plomería', en: 'Other plumbing service' }, cita: { es: 'Cita / coordinar visita', en: 'Appointment' }, }; return (names[service] || names['otro'])[lang === 'en' ? 'en' : 'es']; }
 function heaterMenu(lang) { return lang === 'en' ? `✅ Service: Water heater\n\nChoose heater type:\n1️⃣ Solar\n2️⃣ Conventional (gas/electric)\n\nReply with 1 or 2.` : `✅ Servicio: Calentador\n\nElige tipo:\n1️⃣ Solar\n2️⃣ Convencional (gas/eléctrico)\n\nResponde 1 o 2.`; }
 function isEmergency(text) { const s = norm(text); return (s.includes('emergenc') || s.includes('urgente') || s.includes('inund') || s.includes('revento') || s.includes('exploto') || s.includes('flooding') || s.includes('fuga grande') || s.includes('pipe burst')); }
