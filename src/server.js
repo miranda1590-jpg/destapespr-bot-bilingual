@@ -33,7 +33,6 @@ const MAX_RETRIES      = 3;
 const RETRY_DELAY_MS   = 900;
 const FETCH_TIMEOUT_MS = 15000;
 
-// Rate limit
 const RATE_LIMIT_MAX    = 20;
 const RATE_LIMIT_WIN_MS = 60 * 1000;
 const rateLimitMap      = new Map();
@@ -57,7 +56,6 @@ async function initDB() {
   await db.exec(`CREATE TABLE IF NOT EXISTS sessions (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
   await db.exec(`CREATE TABLE IF NOT EXISTS error_log (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, from_number TEXT, case_id TEXT, action TEXT, error TEXT, details TEXT);`);
   await db.exec(`CREATE TABLE IF NOT EXISTS lead_log (id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, case_id TEXT, from_number TEXT, service TEXT, name TEXT, phone TEXT, city TEXT, status TEXT, emergency INTEGER);`);
-
   const deleted = await db.run('DELETE FROM sessions WHERE updated_at < ?', Date.now() - SESSION_TTL_MS);
   if (deleted.changes) log('info', `Sesiones vencidas eliminadas: ${deleted.changes}`);
 }
@@ -76,17 +74,9 @@ function normalizeFrom(from) {
   return s;
 }
 
-function escapeXml(s) {
-  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
-}
-
-function twiml(msg) {
-  return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(msg)}</Message></Response>`;
-}
-
-function norm(s) {
-  return String(s || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '');
-}
+function escapeXml(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;'); }
+function twiml(msg) { return `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${escapeXml(msg)}</Message></Response>`; }
+function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); }
 
 function makeCaseId() {
   const d = new Date();
@@ -96,8 +86,6 @@ function makeCaseId() {
   const rnd = String(Math.floor(1000 + Math.random() * 9000));
   return `DP-${y}${m}${day}-${rnd}`;
 }
-
-// ─── RATE LIMITING Y FIRMAS ──────────────────────────────────────────────────
 
 function isRateLimited(from) {
   const now = nowMs();
@@ -150,12 +138,7 @@ async function appsPost(action, payload = {}, extraData = {}) {
       });
 
       const text = await res.text();
-      log('info', 'AppsScript HTTP response', {
-        action,
-        status: res.status,
-        ok: res.ok,
-        raw: text.slice(0, 300)
-      });
+      log('info', 'AppsScript HTTP response', { action, status: res.status, ok: res.ok, raw: text.slice(0, 300) });
       
       let json;
       try { json = JSON.parse(text); } catch {
@@ -163,32 +146,21 @@ async function appsPost(action, payload = {}, extraData = {}) {
         return { ok: false, error: 'non_json_response', status: res.status, raw: text.slice(0, 500) };
       }
 
-      if (json?.ok === true) {
-        clearTimeout(timeoutId);
-        return json;
-      }
-      if (json?.error === 'unauthorized') {
-        clearTimeout(timeoutId);
-        return json;
-      }
+      if (json?.ok === true) { clearTimeout(timeoutId); return json; }
+      if (json?.error === 'unauthorized') { clearTimeout(timeoutId); return json; }
 
       if (attempt < MAX_RETRIES) { await sleep(RETRY_DELAY_MS * attempt); continue; }
       return json || { ok: false, error: 'unknown' };
 
     } catch (err) {
       const msg = err?.name === 'AbortError' ? 'timeout' : String(err?.message || err);
-      log('warn', 'AppsScript fetch error', {
-        action,
-        attempt,
-        error: msg
-      });
+      log('warn', 'AppsScript fetch error', { action, attempt, error: msg });
       if (attempt < MAX_RETRIES) { await sleep(RETRY_DELAY_MS * attempt); continue; }
       return { ok: false, error: 'fetch_failed', details: msg };
     } finally {
       clearTimeout(timeoutId);
     }
   }
-
   return { ok: false, error: 'max_retries_exceeded' };
 }
 
@@ -222,15 +194,8 @@ async function alertAdmin(type, session, from) {
   await sendWhatsApp(ADMIN_WHATSAPP, templates[type]());
 }
 
-// ─── DB HELPERS Y LOGICA SESION ───────────────────────────────────────────────
-
-async function logError(from, caseId, action, error, details) {
-  try { await db.run('INSERT INTO error_log (timestamp, from_number, case_id, action, error, details) VALUES (?,?,?,?,?,?)', new Date().toISOString(), from || '', caseId || '', action || '', String(error || ''), JSON.stringify(details || {})); } catch {}
-}
-
-async function logLead(session, from) {
-  try { await db.run('INSERT INTO lead_log (timestamp,case_id,from_number,service,name,phone,city,status,emergency) VALUES (?,?,?,?,?,?,?,?,?)', new Date().toISOString(), session.case_id || '', from || '', session.service || '', session.name || '', session.phone || '', session.city || '', session.status || 'Nuevo', session.emergency ? 1 : 0); } catch {}
-}
+async function logError(from, caseId, action, error, details) { try { await db.run('INSERT INTO error_log (timestamp, from_number, case_id, action, error, details) VALUES (?,?,?,?,?,?)', new Date().toISOString(), from || '', caseId || '', action || '', String(error || ''), JSON.stringify(details || {})); } catch {} }
+async function logLead(session, from) { try { await db.run('INSERT INTO lead_log (timestamp,case_id,from_number,service,name,phone,city,status,emergency) VALUES (?,?,?,?,?,?,?,?,?)', new Date().toISOString(), session.case_id || '', from || '', session.service || '', session.name || '', session.phone || '', session.city || '', session.status || 'Nuevo', session.emergency ? 1 : 0); } catch {} }
 
 async function loadSession(key) {
   try {
@@ -241,9 +206,7 @@ async function loadSession(key) {
   } catch { return null; }
 }
 
-async function saveSession(key, obj) {
-  await db.run('INSERT INTO sessions(k,v,updated_at) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at', key, JSON.stringify(obj || {}), nowMs());
-}
+async function saveSession(key, obj) { await db.run('INSERT INTO sessions(k,v,updated_at) VALUES(?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v, updated_at=excluded.updated_at', key, JSON.stringify(obj || {}), nowMs()); }
 
 function freshSession() { return { lang: 'es', step: 'menu', created_at: new Date().toISOString(), last_seen: nowMs(), service: '', service_label: '', heater_type: 'N/A', case_id: '', name: '', phone: '', city: '', details: '', emergency: false, slots: [], appointment_start: '', appointment_end: '', calendar_event_id: '', status: 'Nuevo' }; }
 function resetSessionData(session) { Object.assign(session, { step: 'menu', service: '', service_label: '', heater_type: 'N/A', case_id: '', name: '', phone: '', city: '', details: '', emergency: false, slots: [], appointment_start: '', appointment_end: '', calendar_event_id: '', status: 'Nuevo' }); }
@@ -256,31 +219,19 @@ const normalizeYesNo = (t) => ['si','sí','s','yes','y','ok','dale','claro','sur
 const mapMenuChoiceToService = (c) => ({ '1':'destape','2':'fuga','3':'camara','4':'calentador','5':'otro','6':'cita' }[c] || '');
 
 function parseInbound(req) { return { from: normalizeFrom(req.body.From || req.body.from || req.body.WaId || ''), body: clean(req.body.Body || req.body.body || ''), profileName: clean(req.body.ProfileName || req.body.profileName || '') }; }
-
 function menuText(lang) { return lang === 'en' ? `👋 Welcome to DestapesPR.\n\nChoose a number or type what you need:\n1️⃣ Drain cleaning\n2️⃣ Leak\n3️⃣ Camera inspection\n4️⃣ Water heater\n5️⃣ Other plumbing service\n6️⃣ Appointment / schedule a visit\n\n💬 Commands: "start", "menu" or "back"\n🌐 Type "español" to switch language\n\n📞 Phone: ${PHONE}` : `👋 Bienvenido a DestapesPR.\n\nSelecciona un número o escribe lo que necesitas:\n1️⃣ Destape (drenajes o tuberías tapadas)\n2️⃣ Fuga de agua\n3️⃣ Inspección con cámara\n4️⃣ Calentador\n5️⃣ Otro servicio\n6️⃣ Cita / coordinar visita\n\n💬 Comandos: "inicio", "menu" o "volver"\n🌐 Escribe "english" para cambiar idioma\n\n📞 Tel: ${PHONE}`; }
 function serviceName(service, lang) { const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, otro: { es: 'Otro servicio de plomería', en: 'Other plumbing service' }, cita: { es: 'Cita / coordinar visita', en: 'Appointment' }, }; return (names[service] || names['otro'])[lang === 'en' ? 'en' : 'es']; }
 function heaterMenu(lang) { return lang === 'en' ? `✅ Service: Water heater\n\nChoose heater type:\n1️⃣ Solar\n2️⃣ Conventional (gas/electric)\n\nReply with 1 or 2.` : `✅ Servicio: Calentador\n\nElige tipo:\n1️⃣ Solar\n2️⃣ Convencional (gas/eléctrico)\n\nResponde 1 o 2.`; }
 function isEmergency(text) { const s = norm(text); return (s.includes('emergenc') || s.includes('urgente') || s.includes('inund') || s.includes('revento') || s.includes('exploto') || s.includes('flooding') || s.includes('fuga grande') || s.includes('pipe burst')); }
 function stripEmergency(text) { return clean(String(text || '').replace(/\bemergencia\b/gi, '').replace(/\bemergency\b/gi, '').replace(/\burgente\b/gi, '').replace(/\s*,\s*,/g, ',').replace(/\s{2,}/g, ' ')); }
 
-// LA FUNCIÓN NUEVA QUE PEDISTE:
 function leadPrompt(service, lang, heaterType) {
   const title = lang === 'en' ? `✅ Service: ${serviceName(service, lang)}` : `✅ Servicio: ${serviceName(service, lang)}`;
   const typeLine = service === 'calentador' && heaterType ? (lang === 'en' ? `✅ Type: ${heaterType}` : `✅ Tipo: ${heaterType}`) : null;
-  
   if (lang === 'en') {
-    return [
-      title, 
-      typeLine, 
-      `\nPlease send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description of the problem\n\nExample:\n"My name is Ana Rivera, 939-555-9999, San Juan, clogged kitchen sink"\n\n🚨 Emergency? Call NOW for immediate assistance: ${PHONE}`
-    ].filter(Boolean).join('\n');
+    return [title, typeLine, `\nPlease send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description of the problem\n\nExample:\n"My name is Ana Rivera, 939-555-9999, San Juan, clogged kitchen sink"\n\n🚨 Emergency? Call NOW for immediate assistance: ${PHONE}`].filter(Boolean).join('\n');
   }
-
-  return [
-    title, 
-    typeLine, 
-    `\nPor favor envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Descripción breve del problema\n\nEjemplo:\n"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"\n\n🚨 ¿Emergencia? Llama AHORA para atención inmediata: ${PHONE}`
-  ].filter(Boolean).join('\n');
+  return [title, typeLine, `\nPor favor envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Descripción breve del problema\n\nEjemplo:\n"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"\n\n🚨 ¿Emergencia? Llama AHORA para atención inmediata: ${PHONE}`].filter(Boolean).join('\n');
 }
 
 function askSchedule(lang) { return lang === 'en' ? `📅 Do you want to schedule an appointment now?\n\nReply YES or NO` : `📅 ¿Quieres agendar una cita ahora?\n\nResponde SI o NO`; }
@@ -289,20 +240,9 @@ function formatSlots(lang, slots) { const lines = [lang === 'en' ? `📅 Availab
 function parsePhoneLoose(s) { const t = String(s || ''); const m = t.match(/(\+?1)?\s*[\(]?\s*(\d{3})\s*[\)]?\s*[-.\s]?\s*(\d{3})\s*[-.\s]?\s*(\d{4})/); return m ? `+1${m[2]}${m[3]}${m[4]}` : ''; }
 function parseLeadMessage(text) { const raw = stripEmergency(String(text || '').trim()); const out = { name: '', city: '', phone: '', details: '' }; const lines = raw.split('\n').map((x) => x.trim()).filter(Boolean); for (const l of lines) { const m1 = l.match(/^(nombre|name)\s*:\s*(.+)$/i); if (m1) { out.name = clean(m1[2]); continue; } const m2 = l.match(/^(pueblo|municipio|ciudad|city|location|ubicacion)\s*:\s*(.+)$/i); if (m2) { out.city = clean(m2[2]); continue; } const m3 = l.match(/^(tel|telefono|phone|celular|numero)\s*:\s*(.+)$/i); if (m3) { const p = parsePhoneLoose(m3[2]) || clean(m3[2]).replace(/[^\d+]/g, ''); out.phone = p.startsWith('+') ? p : (p ? `+1${p.replace(/\D/g, '')}` : ''); continue; } const m4 = l.match(/^(detalles|details|problema|problem|descripcion|description)\s*:\s*(.+)$/i); if (m4) { out.details = clean(m4[2]); continue; } } if (!out.phone) out.phone = parsePhoneLoose(raw); if ((!out.name || !out.city || !out.details) && raw.includes(',')) { const parts = raw.split(',').map((p) => p.trim()).filter(Boolean); if (parts.length >= 4) { if (!out.name) out.name = parts[0]; if (!out.phone) out.phone = parsePhoneLoose(parts[1]) || (parts[1] ? `+1${parts[1].replace(/\D/g, '')}` : ''); if (!out.city) out.city = parts[2]; if (!out.details) out.details = parts.slice(3).join(', '); } else if (parts.length === 3) { if (!out.name) out.name = parts[0]; if (!out.phone) out.phone = parsePhoneLoose(parts[1]) || (parts[1] ? `+1${parts[1].replace(/\D/g, '')}` : ''); if (!out.city) out.city = parts[2]; } } if (!out.details) out.details = clean(lines.join(' ')); out.details = stripEmergency(out.details); if (out.name.length > 100) out.name = out.name.slice(0, 100); if (out.city.length > 60) out.city = out.city.slice(0, 60); if (out.details.length > 900) out.details = out.details.slice(0, 900); return out; }
 
-// ─── APPS SCRIPT ACTIONS (Ajustadas para POST) ────────────────────────────────
-
 async function pushLeadToScript({ session, from, profileName, statusOverride }) {
   const caseId = await ensureCase(session);
-  const payload = {
-    case_id: caseId, created_at: session.created_at || new Date().toISOString(),
-    from_number: from, lang: session.lang || 'es',
-    service: session.service || '', service_label: session.service_label || '',
-    heater_type: session.heater_type || 'N/A',
-    name: session.name || profileName || '', phone: session.phone || '',
-    city: session.city || '', details: session.details || '',
-    status: statusOverride || session.status || 'Nuevo',
-    emergency: !!session.emergency,
-  };
+  const payload = { case_id: caseId, created_at: session.created_at || new Date().toISOString(), from_number: from, lang: session.lang || 'es', service: session.service || '', service_label: session.service_label || '', heater_type: session.heater_type || 'N/A', name: session.name || profileName || '', phone: session.phone || '', city: session.city || '', details: session.details || '', status: statusOverride || session.status || 'Nuevo', emergency: !!session.emergency };
   const resp = await appsPost('lead', payload);
   if (!resp?.ok) await logError(from, caseId, 'lead', resp?.error || 'unknown', resp);
   await logLead(session, from);
@@ -311,23 +251,12 @@ async function pushLeadToScript({ session, from, profileName, statusOverride }) 
 
 async function listAvailability(session) {
   log('info', 'Consultando disponibilidad de citas');
-
   const resp = await appsPost('availability', {}, { limit: 6, days_ahead: 14 });
-
   log('info', 'Availability raw resp', { resp: resp ?? null });
-
   if (!resp?.ok || !Array.isArray(resp.slots)) {
-    log('warn', 'Sin slots o error al consultar disponibilidad', {
-      ok: resp?.ok ?? null,
-      error: resp?.error ?? null,
-      status: resp?.status ?? null,
-      hasSlotsArray: Array.isArray(resp?.slots),
-      keys: resp && typeof resp === 'object' ? Object.keys(resp) : null,
-      sample: resp ? JSON.stringify(resp).slice(0, 400) : null
-    });
+    log('warn', 'Sin slots o error al consultar disponibilidad', { ok: resp?.ok ?? null, error: resp?.error ?? null, status: resp?.status ?? null, hasSlotsArray: Array.isArray(resp?.slots), keys: resp && typeof resp === 'object' ? Object.keys(resp) : null, sample: resp ? JSON.stringify(resp).slice(0, 400) : null });
     return null;
   }
-
   log('info', 'Slots encontrados', { count: resp.slots.length });
   session.slots = resp.slots;
   return resp.slots;
@@ -337,29 +266,16 @@ async function bookSlot({ session, slotIndex, from, profileName }) {
   const slots = Array.isArray(session.slots) ? session.slots : [];
   const s = slots[slotIndex];
   if (!s) return { ok: false, error: 'invalid_slot' };
-
   const caseId = await ensureCase(session);
-  const payload = {
-    case_id: caseId, name: session.name || profileName || 'Cliente',
-    phone: session.phone || '', city: session.city || '', from_number: from,
-    service_label: session.service_label || serviceName(session.service || 'cita', session.lang || 'es'),
-    details: session.details || '', start_iso: s.start_iso, end_iso: s.end_iso, emergency: !!session.emergency,
-  };
-
+  const payload = { case_id: caseId, name: session.name || profileName || 'Cliente', phone: session.phone || '', city: session.city || '', from_number: from, service_label: session.service_label || serviceName(session.service || 'cita', session.lang || 'es'), details: session.details || '', start_iso: s.start_iso, end_iso: s.end_iso, emergency: !!session.emergency };
   const resp = await appsPost('book', payload);
-  if (!resp?.ok) {
-    await logError(from, caseId, 'book', resp?.error || 'unknown', { resp, payload });
-    return resp || { ok: false, error: 'book_failed' };
-  }
-
+  if (!resp?.ok) { await logError(from, caseId, 'book', resp?.error || 'unknown', { resp, payload }); return resp || { ok: false, error: 'book_failed' }; }
   session.appointment_start = resp.start_iso || s.start_iso || '';
   session.appointment_end = resp.end_iso || s.end_iso || '';
   session.calendar_event_id = resp.event_id || '';
   session.status = 'Programado';
   return { ok: true, book: resp };
-}
-
-// ─── HANDLER PRINCIPAL ───────────────────────────────────────────────────────
+}// ─── HANDLER PRINCIPAL ───────────────────────────────────────────────────────
 
 const handler = async (req, res) => {
   try {
@@ -386,7 +302,6 @@ const handler = async (req, res) => {
       return res.status(200).type('text/xml').send(twiml(menuText(session.lang)));
     }
 
-    // ── MENU ──
     if (session.step === 'menu') {
       const service = mapMenuChoiceToService(lower);
       if (!service) { await saveSession(key, session); return res.status(200).type('text/xml').send(twiml(menuText(session.lang))); }
@@ -402,7 +317,6 @@ const handler = async (req, res) => {
       return res.status(200).type('text/xml').send(twiml(leadPrompt(service, session.lang, null)));
     }
 
-    // ── HEATER TYPE ──
     if (session.step === 'heater_type') {
       if (lower === '1') session.heater_type = 'SOLAR';
       else if (lower === '2') session.heater_type = 'Convencional';
@@ -411,7 +325,6 @@ const handler = async (req, res) => {
       return res.status(200).type('text/xml').send(twiml(leadPrompt('calentador', session.lang, session.heater_type)));
     }
 
-    // ── LEAD ──
     if (session.step === 'lead') {
       if (isEmergency(body)) session.emergency = true;
       const parsed = parseLeadMessage(body);
@@ -446,7 +359,6 @@ const handler = async (req, res) => {
       return res.status(200).type('text/xml').send(twiml(askSchedule(session.lang)));
     }
 
-    // ── ASK SCHEDULE ──
     if (session.step === 'ask_schedule') {
       if (!hasMinimumLead(session)) { session.step = 'lead'; await saveSession(key, session); return res.status(200).type('text/xml').send(twiml(leadPrompt(session.service || 'otro', session.lang, session.heater_type !== 'N/A' ? session.heater_type : null))); }
       
@@ -466,7 +378,6 @@ const handler = async (req, res) => {
       return res.status(200).type('text/xml').send(twiml(formatSlots(session.lang, slots)));
     }
 
-    // ── PICK SLOT ──
     if (session.step === 'pick_slot') {
       if (!hasMinimumLead(session)) { session.step = 'lead'; await saveSession(key, session); return res.status(200).type('text/xml').send(twiml(leadPrompt(session.service || 'otro', session.lang, session.heater_type !== 'N/A' ? session.heater_type : null))); }
 
@@ -504,9 +415,6 @@ const handler = async (req, res) => {
   }
 };
 
-// ─── RUTAS PROTEGIDAS ────────────────────────────────────────────────────────
-
-// Middleware para proteger rutas sensibles
 const requireAdmin = (req, res, next) => {
   if (req.query.token !== ADMIN_TOKEN) return res.status(401).json({ ok: false, error: 'Unauthorized' });
   next();
@@ -534,7 +442,6 @@ app.get('/leads', requireAdmin, async (req, res) => {
   catch (e) { res.json({ ok: false, error: e?.message }); }
 });
 
-// ─── GRACEFUL SHUTDOWN ────────────────────────────────────────────────────────
 let server;
 async function shutdown(signal) {
   server.close(async () => { try { await db?.close(); } catch {} process.exit(0); });
@@ -543,5 +450,3 @@ async function shutdown(signal) {
 process.on('SIGTERM', () => shutdown('SIGTERM')); process.on('SIGINT',  () => shutdown('SIGINT'));
 
 initDB().then(() => { server = app.listen(PORT, () => log('info', `${TAG} activo`)); }).catch(() => process.exit(1));
-
-```
