@@ -1,4 +1,4 @@
-/* DEPLOY_BUMP: 20260220-070129 */
+/* DEPLOY_BUMP: 20260220-071227 */
 import 'dotenv/config';
 import express from 'express';
 import morgan from 'morgan';
@@ -446,9 +446,10 @@ function normalizeYesNo(t) {
   return '';
 }
 
-function isEmergency(text, lang) {
-  const s = norm(text);
-  if (!s) return false;
+function isEmergency(text) {
+  const raw = String(text || "");
+  if (!raw) return false;
+  const s = norm(raw);
   return s.includes("emergencia") || s.includes("emergency");
 }
 
@@ -585,7 +586,7 @@ const handler = async (req, res) => {
 
     const lower = norm(body);
 
-    if (isEmergency(body, session.lang)) session.emergency = true;
+    if (isEmergency(body)) session.emergency = true;
 
     if (lower === 'english') session.lang = 'en';
     if (lower === 'español' || lower === 'espanol') session.lang = 'es';
@@ -657,7 +658,7 @@ const handler = async (req, res) => {
     }
 
     if (session.step === 'lead') {
-      session.emergency = isEmergency(body, session.lang) || session.emergency;
+      session.emergency = isEmergency(body) || session.emergency;
 
       const parsed = parseLeadMessage(body);
       if (parsed.name) session.name = parsed.name;
@@ -711,7 +712,7 @@ const handler = async (req, res) => {
         return res.status(200).type('text/xml').send(twiml(leadPrompt(session.service || 'otro', session.lang, session.heater_type !== 'N/A' ? session.heater_type : null)));
       }
 
-      if (isEmergency(body, session.lang)) {
+      if (isEmergency(body)) {
         session.emergency = true;
         const slots = await listAvailability(session);
         session.step = 'pick_slot';
