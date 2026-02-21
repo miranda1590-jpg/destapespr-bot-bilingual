@@ -60,24 +60,29 @@ function detectIntent(text) {
   return null;
 }
 
-async function getEmergencySlots() {
+// NUEVO: Generador dinámico para HOY o MAÑANA (Ajustado domingo a las 10am)
+async function getEmergencySlots(forTomorrow = false) {
   const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
-  const day = prTime.getDay(); 
+  if (forTomorrow) prTime.setDate(prTime.getDate() + 1); // Adelanta un día si se le pide
   
+  const day = prTime.getDay(); 
   const yyyy = prTime.getFullYear();
   const mm = String(prTime.getMonth() + 1).padStart(2, '0');
   const dd = String(prTime.getDate()).padStart(2, '0');
   const dateStr = `${yyyy}-${mm}-${dd}`;
   const prOffset = "-04:00";
 
+  const ymdEs = forTomorrow ? 'MAÑANA' : 'HOY';
+  const ymdEn = forTomorrow ? 'TOMORROW' : 'TODAY';
+
   let slots = [];
-  if (day === 0) { 
-    slots.push({ ymd: 'HOY', slot_en: '9:00 AM - 1:00 PM', slot_es: '9:00 AM - 1:00 PM', start_iso: `${dateStr}T09:00:00${prOffset}`, end_iso: `${dateStr}T13:00:00${prOffset}` });
-    slots.push({ ymd: 'HOY', slot_en: '1:00 PM - 5:00 PM', slot_es: '1:00 PM - 5:00 PM', start_iso: `${dateStr}T13:00:00${prOffset}`, end_iso: `${dateStr}T17:00:00${prOffset}` });
-    slots.push({ ymd: 'HOY', slot_en: '5:00 PM - 9:00 PM', slot_es: '5:00 PM - 9:00 PM', start_iso: `${dateStr}T17:00:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
-  } else { 
-    slots.push({ ymd: 'HOY', slot_en: '6:00 PM - 7:30 PM', slot_es: '6:00 PM - 7:30 PM', start_iso: `${dateStr}T18:00:00${prOffset}`, end_iso: `${dateStr}T19:30:00${prOffset}` });
-    slots.push({ ymd: 'HOY', slot_en: '7:30 PM - 9:00 PM', slot_es: '7:30 PM - 9:00 PM', start_iso: `${dateStr}T19:30:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
+  if (day === 0) { // DOMINGO (Empezando a las 10:00 AM)
+    slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '10:00 AM - 1:00 PM', slot_es: '10:00 AM - 1:00 PM', start_iso: `${dateStr}T10:00:00${prOffset}`, end_iso: `${dateStr}T13:00:00${prOffset}` });
+    slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '1:00 PM - 5:00 PM', slot_es: '1:00 PM - 5:00 PM', start_iso: `${dateStr}T13:00:00${prOffset}`, end_iso: `${dateStr}T17:00:00${prOffset}` });
+    slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '5:00 PM - 9:00 PM', slot_es: '5:00 PM - 9:00 PM', start_iso: `${dateStr}T17:00:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
+  } else { // LUNES - SÁBADO (6pm - 9pm)
+    slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '6:00 PM - 7:30 PM', slot_es: '6:00 PM - 7:30 PM', start_iso: `${dateStr}T18:00:00${prOffset}`, end_iso: `${dateStr}T19:30:00${prOffset}` });
+    slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '7:30 PM - 9:00 PM', slot_es: '7:30 PM - 9:00 PM', start_iso: `${dateStr}T19:30:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
   }
 
   try {
@@ -131,10 +136,12 @@ function askSchedule(lang) {
   return lang === 'en' ? `📅 Do you want to schedule an appointment now?\n\nReply YES or NO\n\n🚨 Emergency? Call now: ${PHONE}` : `📅 ¿Quieres agendar una cita ahora?\n\nResponde SI o NO\n\n🚨 ¿Emergencia? Llama ahora: ${PHONE}`;
 }
 
+// NUEVO: Formateador adaptado a HOY, MAÑANA o Fecha Regular
 function formatSlots(lang, slots) { 
   const lines = [lang === 'en' ? `📅 Available slots:` : `📅 Horarios disponibles:`, '']; 
   for (let i = 0; i < slots.length; i++) { 
-    lines.push(`${i + 1}️⃣ ${slots[i].ymd} — ${lang === 'en' ? slots[i].slot_en : slots[i].slot_es}`); 
+    const ymdStr = lang === 'en' ? (slots[i].ymd_en || slots[i].ymd) : slots[i].ymd;
+    lines.push(`${i + 1}️⃣ ${ymdStr} — ${lang === 'en' ? slots[i].slot_en : slots[i].slot_es}`); 
   } 
   lines.push('', lang === 'en' ? `Reply with a number (1-${slots.length}) or type "menu" to cancel.` : `Responde con un número (1-${slots.length}) o escribe "menu" para cancelar.`); 
   return lines.join('\n'); 
@@ -258,14 +265,29 @@ const handler = async (req, res) => {
     await alertAdmin('new_lead', session, from);
 
     if (session.service === 'emergencia') {
-      const slots = await getEmergencySlots();
+      let slots = await getEmergencySlots(false); // Busca los de HOY primero
+      
+      const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
+      // JUGADA MAESTRA: Si hoy es sábado (6) y se llenaron los de hoy, busca los de mañana (domingo)
+      if (slots.length === 0 && prTime.getDay() === 6) {
+          slots = await getEmergencySlots(true); // Busca los de mañana
+      }
+
       if (slots.length > 0) {
         session.slots = slots;
         session.step = 'pick_slot';
-        const msgIntro = session.lang === 'en' ? "🚨 Emergency received. Please select a time for TODAY:\n\n" : "🚨 Emergencia recibida. Por favor selecciona un horario para HOY:\n\n";
+        
+        const isTomorrow = slots[0].ymd === 'MAÑANA';
+        let msgIntro = "";
+        
+        if (isTomorrow) {
+            msgIntro = session.lang === 'en' ? "🚨 Today's slots are full, but we have emergency slots for TOMORROW:\n\n" : "🚨 Los espacios de hoy están llenos, pero tenemos emergencias para MAÑANA:\n\n";
+        } else {
+            msgIntro = session.lang === 'en' ? "🚨 Emergency received. Please select a time for TODAY:\n\n" : "🚨 Emergencia recibida. Por favor selecciona un horario para HOY:\n\n";
+        }
+        
         responseMsg = msgIntro + formatSlots(session.lang, slots);
       } else {
-        // PLAN B (CASO 1): No hay emergencias desde el saque. Busca los regulares.
         const avail = await appsPost('availability', {}, { limit: 6, days_ahead: 14 });
         if (avail && avail.slots && avail.slots.length > 0) {
           session.slots = avail.slots;
@@ -322,7 +344,7 @@ const handler = async (req, res) => {
         }
 
         await alertAdmin('booked', session, from);
-        responseMsg = session.lang === 'en' ? `✅ Appointment confirmed!\n\nCase: ${session.case_id}\nWhen: ${chosen.ymd} — ${slotLabel}\n\nWe will contact you soon. Type "menu" to return.` : `✅ ¡Cita confirmada!\n\nCaso: ${session.case_id}\nCuándo: ${chosen.ymd} — ${slotLabel}\n\nTe estaremos contactando. Escribe "menu" para regresar.`;
+        responseMsg = session.lang === 'en' ? `✅ Appointment confirmed!\n\nCase: ${session.case_id}\nWhen: ${chosen.ymd === 'HOY' || chosen.ymd === 'MAÑANA' ? (lang === 'en' ? chosen.ymd_en : chosen.ymd) : chosen.ymd} — ${slotLabel}\n\nWe will contact you soon. Type "menu" to return.` : `✅ ¡Cita confirmada!\n\nCaso: ${session.case_id}\nCuándo: ${chosen.ymd === 'HOY' || chosen.ymd === 'MAÑANA' ? chosen.ymd : chosen.ymd} — ${slotLabel}\n\nTe estaremos contactando. Escribe "menu" para regresar.`;
         session.step = 'menu';
       } else {
         
@@ -337,7 +359,6 @@ const handler = async (req, res) => {
               ? `❌ That slot is no longer available.\n\nPlease choose a different number:\n\n${formatSlots(session.lang, session.slots)}` 
               : `❌ Ese horario ya se ocupó.\n\nPor favor escoge un número diferente:\n\n${formatSlots(session.lang, session.slots)}`;
         } else {
-            // PLAN B (CASO 2): El cliente agota el último de emergencia, le buscamos regulares.
             const avail = await appsPost('availability', {}, { limit: 6, days_ahead: 14 });
             if (avail && avail.slots && avail.slots.length > 0) {
                 session.slots = avail.slots;
