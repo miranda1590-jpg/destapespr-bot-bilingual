@@ -63,7 +63,7 @@ function detectIntent(text) {
   return null;
 }
 
-// GENERADOR DINÁMICO DE HORARIOS DE EMERGENCIA
+// GENERADOR DINÁMICO DE HORARIOS DE EMERGENCIA (CORREGIDO PR TIMEZONE)
 function getEmergencySlots() {
   // Ajuste para hora local de PR
   const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
@@ -74,14 +74,17 @@ function getEmergencySlots() {
   const dd = String(prTime.getDate()).padStart(2, '0');
   const dateStr = `${yyyy}-${mm}-${dd}`;
 
+  // La zona horaria de Puerto Rico es UTC-4 (Arreglo para que Google Calendar no lo rechace)
+  const prOffset = "-04:00";
+
   let slots = [];
   if (day === 0) { // Domingo (9am - 9pm)
-    slots.push({ ymd: 'HOY', slot_en: '9:00 AM - 1:00 PM', slot_es: '9:00 AM - 1:00 PM', start_iso: `${dateStr}T09:00:00Z`, end_iso: `${dateStr}T13:00:00Z` });
-    slots.push({ ymd: 'HOY', slot_en: '1:00 PM - 5:00 PM', slot_es: '1:00 PM - 5:00 PM', start_iso: `${dateStr}T13:00:00Z`, end_iso: `${dateStr}T17:00:00Z` });
-    slots.push({ ymd: 'HOY', slot_en: '5:00 PM - 9:00 PM', slot_es: '5:00 PM - 9:00 PM', start_iso: `${dateStr}T17:00:00Z`, end_iso: `${dateStr}T21:00:00Z` });
+    slots.push({ ymd: 'HOY', slot_en: '9:00 AM - 1:00 PM', slot_es: '9:00 AM - 1:00 PM', start_iso: `${dateStr}T09:00:00${prOffset}`, end_iso: `${dateStr}T13:00:00${prOffset}` });
+    slots.push({ ymd: 'HOY', slot_en: '1:00 PM - 5:00 PM', slot_es: '1:00 PM - 5:00 PM', start_iso: `${dateStr}T13:00:00${prOffset}`, end_iso: `${dateStr}T17:00:00${prOffset}` });
+    slots.push({ ymd: 'HOY', slot_en: '5:00 PM - 9:00 PM', slot_es: '5:00 PM - 9:00 PM', start_iso: `${dateStr}T17:00:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
   } else { // Lunes - Sábado (6pm - 9pm)
-    slots.push({ ymd: 'HOY', slot_en: '6:00 PM - 7:30 PM', slot_es: '6:00 PM - 7:30 PM', start_iso: `${dateStr}T18:00:00Z`, end_iso: `${dateStr}T19:30:00Z` });
-    slots.push({ ymd: 'HOY', slot_en: '7:30 PM - 9:00 PM', slot_es: '7:30 PM - 9:00 PM', start_iso: `${dateStr}T19:30:00Z`, end_iso: `${dateStr}T21:00:00Z` });
+    slots.push({ ymd: 'HOY', slot_en: '6:00 PM - 7:30 PM', slot_es: '6:00 PM - 7:30 PM', start_iso: `${dateStr}T18:00:00${prOffset}`, end_iso: `${dateStr}T19:30:00${prOffset}` });
+    slots.push({ ymd: 'HOY', slot_en: '7:30 PM - 9:00 PM', slot_es: '7:30 PM - 9:00 PM', start_iso: `${dateStr}T19:30:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
   }
   return slots;
 }
