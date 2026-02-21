@@ -35,10 +35,13 @@ async function initDB() {
 
 function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); }
 
+// CEREBRO DE IDIOMAS (Actualizado para detectar keywords en inglés/español)
 function detectLanguage(text, currentLang) {
   const lower = norm(text);
-  if (['hello', 'hi', 'hey', 'good morning', 'english'].some(w => lower.includes(w))) return 'en';
-  if (['hola', 'buenas', 'saludos', 'español', 'espanol'].some(w => lower.includes(w))) return 'es';
+  // Si usa cualquiera de estas palabras en inglés, cambia el idioma a 'en'
+  if (['hello', 'hi', 'hey', 'english', 'emergency', 'urgent', 'price', 'cost', 'estimate', 'clog', 'leak', 'heater', 'camera', 'appointment'].some(w => lower.includes(w))) return 'en';
+  // Si usa palabras en español, lo mantiene en 'es'
+  if (['hola', 'buenas', 'saludos', 'español', 'espanol', 'emergencia', 'urgencia', 'urgente', 'precio', 'costo', 'destape', 'fuga', 'calentador', 'cita'].some(w => lower.includes(w))) return 'es';
   return currentLang;
 }
 
@@ -47,14 +50,11 @@ function isHello(text) {
   return ['hola', 'hello', 'hi', 'hey', 'buenas', 'saludos', 'start', 'inicio', 'menu', 'volver', 'back'].includes(lower);
 }
 
-// CEREBRO: Detecta intenciones y atajos
+// CEREBRO DE INTENCIONES
 function detectIntent(text) {
   const lower = norm(text);
-  // 1. EMERGENCIA (Prioridad máxima)
   if (['emergencia', 'urgencia', 'emergency', 'urgent', 'urgente'].some(w => lower.includes(w))) return 'emergencia';
-  // 2. Filtro de Precios y Estimados
   if (['precio', 'costo', 'estimado', 'cuanto', 'sale', 'price', 'cost', 'estimate', 'how much'].some(w => lower.includes(w))) return 'precio';
-  // 3. Atajos de Servicios
   if (['destape', 'tapado', 'inodoro', 'fregadero', 'tuberia', 'clog', 'clogged', 'drain', 'toilet', 'sink'].some(w => lower.includes(w))) return 'destape';
   if (['fuga', 'goteo', 'rota', 'filtra', 'leak', 'leaking', 'broken'].some(w => lower.includes(w))) return 'fuga';
   if (['calentador', 'ducha', 'no calienta', 'heater', 'water heater'].some(w => lower.includes(w))) return 'calentador';
@@ -63,26 +63,23 @@ function detectIntent(text) {
   return null;
 }
 
-// GENERADOR DINÁMICO DE HORARIOS DE EMERGENCIA (CORREGIDO PR TIMEZONE)
+// GENERADOR DINÁMICO DE HORARIOS DE EMERGENCIA
 function getEmergencySlots() {
-  // Ajuste para hora local de PR
   const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
-  const day = prTime.getDay(); // 0 es Domingo
+  const day = prTime.getDay(); 
   
   const yyyy = prTime.getFullYear();
   const mm = String(prTime.getMonth() + 1).padStart(2, '0');
   const dd = String(prTime.getDate()).padStart(2, '0');
   const dateStr = `${yyyy}-${mm}-${dd}`;
-
-  // La zona horaria de Puerto Rico es UTC-4 (Arreglo para que Google Calendar no lo rechace)
   const prOffset = "-04:00";
 
   let slots = [];
-  if (day === 0) { // Domingo (9am - 9pm)
+  if (day === 0) { 
     slots.push({ ymd: 'HOY', slot_en: '9:00 AM - 1:00 PM', slot_es: '9:00 AM - 1:00 PM', start_iso: `${dateStr}T09:00:00${prOffset}`, end_iso: `${dateStr}T13:00:00${prOffset}` });
     slots.push({ ymd: 'HOY', slot_en: '1:00 PM - 5:00 PM', slot_es: '1:00 PM - 5:00 PM', start_iso: `${dateStr}T13:00:00${prOffset}`, end_iso: `${dateStr}T17:00:00${prOffset}` });
     slots.push({ ymd: 'HOY', slot_en: '5:00 PM - 9:00 PM', slot_es: '5:00 PM - 9:00 PM', start_iso: `${dateStr}T17:00:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
-  } else { // Lunes - Sábado (6pm - 9pm)
+  } else { 
     slots.push({ ymd: 'HOY', slot_en: '6:00 PM - 7:30 PM', slot_es: '6:00 PM - 7:30 PM', start_iso: `${dateStr}T18:00:00${prOffset}`, end_iso: `${dateStr}T19:30:00${prOffset}` });
     slots.push({ ymd: 'HOY', slot_en: '7:30 PM - 9:00 PM', slot_es: '7:30 PM - 9:00 PM', start_iso: `${dateStr}T19:30:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
   }
@@ -107,7 +104,6 @@ function leadPrompt(service, lang) {
   const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, cita: { es: 'Cita', en: 'Appointment' }, otro: { es: 'Otro', en: 'Other' }, precio: { es: 'Estimado / Visita', en: 'Estimate / Visit' }, emergencia: { es: 'Emergencia', en: 'Emergency' } };
   const sName = names[service]?.[lang] || names['otro'][lang];
   
-  // MODO EMERGENCIA
   if (service === 'emergencia') {
     if (lang === 'en') {
       return `🚨 Service: ${sName}\n\n⚠️ Emergency services have an initial cost of $250.\n\nTo assist you immediately, please send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the emergency\n\n🚨 Emergency? Call NOW: ${PHONE}`;
@@ -115,7 +111,6 @@ function leadPrompt(service, lang) {
     return `🚨 Servicio: ${sName}\n\n⚠️ Las emergencias tienen un costo inicial de $250 dólares.\n\nPara atenderte lo más pronto posible, envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción de la emergencia\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
   }
 
-  // MODO FILTRO DE PRECIOS
   if (service === 'precio') {
     if (lang === 'en') {
       return `✅ Service: ${sName}\n\n💵 For costs and estimates, please tell us the service needed and send photos of the area.\n\n🛠️ If you want us to visit you, the evaluation visit has a cost of $80 (which is deducted from the final cost of any service performed).\n\nTo schedule your visit, please send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the problem\n\n🚨 Emergency? Call NOW: ${PHONE}`;
@@ -123,7 +118,6 @@ function leadPrompt(service, lang) {
     return `✅ Servicio: ${sName}\n\n💵 Para costo y/o estimados de servicios, déjanos un mensaje con el servicio a estimar y fotos del área a trabajar.\n\n🛠️ Si deseas que lo visitemos, la visita tiene un costo de $80 dólares (que se deducen del costo de cualquier servicio que se realice).\n\nPara agendar tu visita, envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción del problema\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
   }
 
-  // MODO NORMAL
   if (lang === 'en') {
     return `✅ Service: ${sName}\n\nPlease send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description of the problem\n\nExample:\n"My name is Ana Rivera, 939-555-9999, San Juan, clogged kitchen sink"\n\n🚨 Emergency? Call NOW for immediate assistance: ${PHONE}`;
   }
@@ -185,12 +179,12 @@ const handler = async (req, res) => {
   let row = await db.get('SELECT v FROM sessions WHERE k=?', key);
   let session = row ? JSON.parse(row.v) : { lang: 'es', step: 'menu', case_id: `DP-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}-${Math.floor(1000+Math.random()*9000)}` };
 
+  // Detecta idioma con la nueva regla que fuerza el inglés si ve palabras clave
   session.lang = detectLanguage(body, session.lang);
   
   const intent = detectIntent(lower);
   const isAnswering = ['si', 'sí', 'yes', 'y', 's', '1', '2', '3', '4', '5', '6'].includes(lower);
 
-  // Reinicia o adapta si hay un saludo o una intención detectada fuera de tiempo
   if (isHello(body) || (intent && session.step !== 'lead' && session.step !== 'heater_type' && session.step !== 'menu' && !isAnswering)) {
     if (intent && !isHello(body)) {
       session.step = 'menu';
@@ -261,7 +255,6 @@ const handler = async (req, res) => {
     
     await alertAdmin('new_lead', session, from);
 
-    // FLUJO EXPRÉS PARA EMERGENCIAS (Brinca el preguntar y tira los horarios de HOY)
     if (session.service === 'emergencia') {
       const slots = getEmergencySlots();
       session.slots = slots;
