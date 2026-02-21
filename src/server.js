@@ -265,8 +265,21 @@ const handler = async (req, res) => {
         const msgIntro = session.lang === 'en' ? "🚨 Emergency received. Please select a time for TODAY:\n\n" : "🚨 Emergencia recibida. Por favor selecciona un horario para HOY:\n\n";
         responseMsg = msgIntro + formatSlots(session.lang, slots);
       } else {
-        responseMsg = session.lang === 'en' ? "⚠️ All emergency slots for today are currently full. We will contact you ASAP." : "⚠️ Todos los espacios de emergencia para hoy están llenos. Te contactaremos lo antes posible.";
-        session.step = 'menu';
+        // PLAN B (CASO 1): No hay emergencias desde el saque. Busca los regulares.
+        const avail = await appsPost('availability', {}, { limit: 6, days_ahead: 14 });
+        if (avail && avail.slots && avail.slots.length > 0) {
+          session.slots = avail.slots;
+          session.step = 'pick_slot';
+          const msgIntro = session.lang === 'en' 
+            ? "⚠️ All emergency slots for today are full.\n\nHowever, here are the next available regular slots:\n\n" 
+            : "⚠️ Todos los espacios de emergencia para hoy están llenos.\n\nSin embargo, aquí tienes los próximos horarios regulares disponibles:\n\n";
+          responseMsg = msgIntro + formatSlots(session.lang, avail.slots);
+        } else {
+          responseMsg = session.lang === 'en' 
+            ? "⚠️ All slots are currently full. We will contact you ASAP." 
+            : "⚠️ Todos los espacios de emergencia y regulares están llenos. Te contactaremos lo antes posible.";
+          session.step = 'menu';
+        }
       }
     } else {
       session.step = 'ask_schedule';
@@ -312,26 +325,31 @@ const handler = async (req, res) => {
         responseMsg = session.lang === 'en' ? `✅ Appointment confirmed!\n\nCase: ${session.case_id}\nWhen: ${chosen.ymd} — ${slotLabel}\n\nWe will contact you soon. Type "menu" to return.` : `✅ ¡Cita confirmada!\n\nCaso: ${session.case_id}\nCuándo: ${chosen.ymd} — ${slotLabel}\n\nTe estaremos contactando. Escribe "menu" para regresar.`;
         session.step = 'menu';
       } else {
-        // CORRECCIÓN MAGISTRAL
-        // 1. Guardamos el horario malo en memoria para que no le salga a nadie más
+        
         if (session.service === 'emergencia') {
           await db.run('INSERT OR IGNORE INTO emergency_bookings (date_slot, created_at) VALUES (?, ?)', chosen.start_iso, Date.now());
         }
         
-        // 2. Borramos el horario malo de la lista de opciones de ESTE cliente
         session.slots = session.slots.filter(s => s.start_iso !== chosen.start_iso);
         
-        // 3. Le mostramos la lista actualizada SIN sacarlo al menú principal
         if (session.slots.length > 0) {
             responseMsg = session.lang === 'en' 
               ? `❌ That slot is no longer available.\n\nPlease choose a different number:\n\n${formatSlots(session.lang, session.slots)}` 
               : `❌ Ese horario ya se ocupó.\n\nPor favor escoge un número diferente:\n\n${formatSlots(session.lang, session.slots)}`;
-            // NO cambiamos session.step, se queda en 'pick_slot' para que responda de nuevo
         } else {
-            responseMsg = session.lang === 'en' 
-              ? `❌ We are sorry, all emergency slots were just taken. We will contact you ASAP.` 
-              : `❌ Lo sentimos, todos los espacios de emergencia se acaban de ocupar. Te contactaremos lo antes posible.`;
-            session.step = 'menu';
+            // PLAN B (CASO 2): El cliente agota el último de emergencia, le buscamos regulares.
+            const avail = await appsPost('availability', {}, { limit: 6, days_ahead: 14 });
+            if (avail && avail.slots && avail.slots.length > 0) {
+                session.slots = avail.slots;
+                responseMsg = session.lang === 'en' 
+                  ? `❌ We are sorry, all emergency slots were just taken.\n\nHowever, here are the next available regular slots:\n\n${formatSlots(session.lang, session.slots)}` 
+                  : `❌ Lo sentimos, los espacios de emergencia se acaban de ocupar.\n\nSin embargo, aquí tienes los próximos horarios regulares disponibles:\n\n${formatSlots(session.lang, session.slots)}`;
+            } else {
+                responseMsg = session.lang === 'en' 
+                  ? `❌ We are sorry, all slots are currently full. We will contact you ASAP.` 
+                  : `❌ Lo sentimos, todos los espacios están ocupados actualmente. Te contactaremos lo antes posible.`;
+                session.step = 'menu';
+            }
         }
       }
     }
@@ -345,5 +363,5 @@ app.post('/webhook/whatsapp', handler);
 app.get('/', (req, res) => res.send('DestapesPR Bot Activo ✅'));
 
 initDB().then(() => {
-  app.listen(PORT, () => console.log(`${TAG} Bilingüe, CRM, Calendar, Submenú y NLP activo 🚀`));
+  app.listen(PORT, () => console.log(`${TAG} Bilingüe, CRM, Calendar, Submenú, NLP y Fallback Regular activo 🚀`));
 });
