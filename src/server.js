@@ -5,7 +5,6 @@ import morgan from 'morgan';
 import sqlite3 from 'sqlite3';
 import { open } from 'sqlite';
 import fetch from 'node-fetch';
-import crypto from 'crypto';
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -23,7 +22,6 @@ const TWILIO_ACCOUNT_SID   = process.env.TWILIO_ACCOUNT_SID  || '';
 const TWILIO_AUTH_TOKEN    = process.env.TWILIO_AUTH_TOKEN   || '';
 const TWILIO_WHATSAPP_FROM = process.env.TWILIO_PHONE_NUMBER || '';
 
-const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
 let db;
 
 function log(level, msg, meta = {}) {
@@ -37,7 +35,6 @@ async function initDB() {
 
 function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); }
 
-// --- DETECCIÓN AUTOMÁTICA DE IDIOMA Y SALUDOS ---
 function detectLanguage(text, currentLang) {
   const lower = norm(text);
   if (['hello', 'hi', 'hey', 'good morning', 'english'].some(w => lower.includes(w))) return 'en';
@@ -50,7 +47,20 @@ function isHello(text) {
   return ['hola', 'hello', 'hi', 'hey', 'buenas', 'saludos', 'start', 'inicio', 'menu', 'volver', 'back'].includes(lower);
 }
 
-// --- TEXTOS ESTÉTICOS BILINGÜES ---
+// NUEVO: Cerebro de palabras clave
+function detectIntent(text) {
+  const lower = norm(text);
+  // Filtro de Precios y Estimados
+  if (['precio', 'costo', 'estimado', 'cuanto', 'sale', 'price', 'cost', 'estimate', 'how much'].some(w => lower.includes(w))) return 'precio';
+  // Atajos de Servicios
+  if (['destape', 'tapado', 'inodoro', 'fregadero', 'tuberia', 'clog', 'clogged', 'drain', 'toilet', 'sink'].some(w => lower.includes(w))) return 'destape';
+  if (['fuga', 'goteo', 'rota', 'filtra', 'leak', 'leaking', 'broken'].some(w => lower.includes(w))) return 'fuga';
+  if (['calentador', 'ducha', 'no calienta', 'heater', 'water heater'].some(w => lower.includes(w))) return 'calentador';
+  if (['camara', 'inspeccion', 'video', 'camera', 'inspection'].some(w => lower.includes(w))) return 'camara';
+  if (['cita', 'visita', 'appointment', 'schedule'].some(w => lower.includes(w))) return 'cita';
+  return null;
+}
+
 function menuText(lang) {
   if (lang === 'en') {
     return `👋 Welcome to DestapesPR.\n\nChoose a number or type what you need:\n1️⃣ Drain cleaning (clogged pipes)\n2️⃣ Water leak (drips / leaks)\n3️⃣ Camera inspection (video)\n4️⃣ Water heater (gas/electric/solar)\n5️⃣ Other plumbing service\n6️⃣ Appointment / schedule a visit\n\n💬 Commands: "start", "menu" or "back"\n🌐 Type "español" to switch language\n\n📘 Facebook: ${FB_LINK}\n📞 Phone: ${PHONE}`;
@@ -65,10 +75,18 @@ function heaterMenuText(lang) {
   return `🔥 Por favor selecciona el tipo de calentador:\n\n1️⃣ Solar\n2️⃣ De gas\n3️⃣ Eléctrico / De línea\n\nResponde con un número (1-3) o escribe "menu" para regresar.`;
 }
 
+// ACTUALIZADO: Manejo especial para la pregunta de precios ($80)
 function leadPrompt(service, lang) {
-  const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, cita: { es: 'Cita', en: 'Appointment' }, otro: { es: 'Otro', en: 'Other' } };
+  const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, cita: { es: 'Cita', en: 'Appointment' }, otro: { es: 'Otro', en: 'Other' }, precio: { es: 'Estimado / Visita', en: 'Estimate / Visit' } };
   const sName = names[service]?.[lang] || names['otro'][lang];
   
+  if (service === 'precio') {
+    if (lang === 'en') {
+      return `✅ Service: ${sName}\n\n💵 For costs and estimates, please tell us the service needed and send photos of the area.\n\n🛠️ If you want us to visit you, the evaluation visit has a cost of $80 (which is deducted from the final cost of any service performed).\n\nTo schedule your visit, please send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the problem\n\n🚨 Emergency? Call NOW: ${PHONE}`;
+    }
+    return `✅ Servicio: ${sName}\n\n💵 Para costo y/o estimados de servicios, déjanos un mensaje con el servicio a estimar y fotos del área a trabajar.\n\n🛠️ Si deseas que lo visitemos, la visita tiene un costo de $80 dólares (que se deducen del costo de cualquier servicio que se realice).\n\nPara agendar tu visita, envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción del problema\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
+  }
+
   if (lang === 'en') {
     return `✅ Service: ${sName}\n\nPlease send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description of the problem\n\nExample:\n"My name is Ana Rivera, 939-555-9999, San Juan, clogged kitchen sink"\n\n🚨 Emergency? Call NOW for immediate assistance: ${PHONE}`;
   }
@@ -88,7 +106,6 @@ function formatSlots(lang, slots) {
   return lines.join('\n'); 
 }
 
-// --- COMUNICACIÓN Y ALERTAS ---
 async function sendWhatsApp(to, text) {
   try {
     const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
@@ -120,7 +137,8 @@ function parseLead(body) {
   if (parts.length >= 4) return { name: parts[0], phone: parts[1], city: parts[2], details: parts.slice(3).join(', ') };
   if (parts.length === 3) return { name: parts[0], phone: parts[1], city: parts[2], details: body };
   return { name: body.substring(0, 30), phone: '', city: '', details: body };
-}// --- HANDLER PRINCIPAL ---
+}
+
 const handler = async (req, res) => {
   const from = req.body.From;
   const body = (req.body.Body || '').trim();
@@ -130,27 +148,37 @@ const handler = async (req, res) => {
   let row = await db.get('SELECT v FROM sessions WHERE k=?', key);
   let session = row ? JSON.parse(row.v) : { lang: 'es', step: 'menu', case_id: `DP-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}-${Math.floor(1000+Math.random()*9000)}` };
 
-  // Detecta idioma automáticamente y valida comandos de inicio
   session.lang = detectLanguage(body, session.lang);
+  
+  // Analizamos la intención de la frase del cliente
+  const intent = detectIntent(lower);
+  const isAnswering = ['si', 'sí', 'yes', 'y', 's', '1', '2', '3', '4', '5', '6'].includes(lower);
 
-  if (isHello(body)) {
-    session.step = 'menu';
-    await db.run('INSERT OR REPLACE INTO sessions (k, v, updated_at) VALUES (?, ?, ?)', key, JSON.stringify(session), Date.now());
-    return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${menuText(session.lang)}</Message></Response>`);
+  // Si saluda, O si el bot estaba perdido y el cliente tira una keyword directa (ej. "precio")
+  if (isHello(body) || (intent && session.step !== 'lead' && session.step !== 'heater_type' && session.step !== 'menu' && !isAnswering)) {
+    if (intent && !isHello(body)) {
+      session.step = 'menu'; // Forzamos al bloque de menú para que lo atrape y lo mande al flujo
+    } else {
+      session.step = 'menu';
+      await db.run('INSERT OR REPLACE INTO sessions (k, v, updated_at) VALUES (?, ?, ?)', key, JSON.stringify(session), Date.now());
+      return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${menuText(session.lang)}</Message></Response>`);
+    }
   }
 
   let responseMsg = "";
 
   if (session.step === 'menu') {
     const choices = { '1':'destape', '2':'fuga', '3':'camara', '4':'calentador', '5':'otro', '6':'cita' };
-    const serviceLabels = { 'destape':'Drain cleaning', 'fuga':'Water leak', 'camara':'Camera inspection', 'calentador':'Water heater', 'otro':'Other', 'cita':'Appointment' };
-    const serviceLabelsEs = { 'destape':'Destape', 'fuga':'Fuga de agua', 'camara':'Inspección con cámara', 'calentador':'Calentador', 'otro':'Otro', 'cita':'Cita' };
+    const serviceLabels = { 'destape':'Drain cleaning', 'fuga':'Water leak', 'camara':'Camera inspection', 'calentador':'Water heater', 'otro':'Other', 'cita':'Appointment', 'precio':'Estimate / Visit ($80)' };
+    const serviceLabelsEs = { 'destape':'Destape', 'fuga':'Fuga de agua', 'camara':'Inspección con cámara', 'calentador':'Calentador', 'otro':'Otro', 'cita':'Cita', 'precio':'Estimado / Visita ($80)' };
 
-    if (choices[body]) {
-      session.service = choices[body];
+    // Si escribe el número agarra 'choices', si no, agarra lo que haya detectado 'intent'
+    const selectedService = choices[body] || intent;
+
+    if (selectedService) {
+      session.service = selectedService;
       session.service_label = session.lang === 'en' ? serviceLabels[session.service] : serviceLabelsEs[session.service];
       
-      // Si elige calentador (4), pasa al sub-menú de calentadores
       if (session.service === 'calentador') {
         session.step = 'heater_type';
         responseMsg = heaterMenuText(session.lang);
@@ -168,24 +196,20 @@ const handler = async (req, res) => {
     
     if (heaterTypes[body]) {
       session.heater_type = session.lang === 'en' ? heaterTypesEn[body] : heaterTypes[body];
-      // Añade el tipo de calentador al nombre del servicio (Ej. "Calentador (Solar)")
       session.service_label = `${session.service_label} (${session.heater_type})`;
       session.step = 'lead';
-      // Pasamos 'calentador' modificado para que leadPrompt muestre el nombre completo en el título
       responseMsg = leadPrompt(session.service, session.lang).replace("✅ Servicio: Calentador", `✅ Servicio: Calentador (${session.heater_type})`).replace("✅ Service: Water heater", `✅ Service: Water heater (${session.heater_type})`);
     } else {
       responseMsg = heaterMenuText(session.lang);
     }
   }
   else if (session.step === 'lead') {
-    // Evita bloqueos: Toma la info, la extrae como pueda, y SIEMPRE avanza
     const extracted = parseLead(body);
     session.name = extracted.name || "Cliente";
     session.phone = extracted.phone || from.replace('whatsapp:', '');
     session.city = extracted.city || "No especificado";
     session.details = extracted.details || body;
     
-    // Subir a Google Sheets CRM (AHORA CON FECHA EXACTA INCLUIDA)
     appsPost('lead', { 
       case_id: session.case_id, 
       created_at: new Date().toISOString(),
@@ -200,7 +224,6 @@ const handler = async (req, res) => {
       status: 'Nuevo' 
     }).catch(()=>{});
     
-    // Alerta al Administrador
     await alertAdmin('new_lead', session, from);
 
     session.step = 'ask_schedule';
@@ -253,5 +276,5 @@ app.post('/webhook/whatsapp', handler);
 app.get('/', (req, res) => res.send('DestapesPR Bot Activo ✅'));
 
 initDB().then(() => {
-  app.listen(PORT, () => console.log(`${TAG} Bilingüe, CRM, Calendar y Submenú activo 🚀`));
+  app.listen(PORT, () => console.log(`${TAG} Bilingüe, CRM, Calendar, Submenú y NLP activo 🚀`));
 });
