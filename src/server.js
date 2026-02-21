@@ -31,16 +31,15 @@ function log(level, msg, meta = {}) {
 async function initDB() {
   db = await open({ filename: './data.sqlite', driver: sqlite3.Database });
   await db.exec(`CREATE TABLE IF NOT EXISTS sessions (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
+  // NUEVO: Memoria interna para bloquear horarios de emergencia ya tomados
+  await db.exec(`CREATE TABLE IF NOT EXISTS emergency_bookings (date_slot TEXT PRIMARY KEY, created_at INTEGER);`);
 }
 
 function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); }
 
-// CEREBRO DE IDIOMAS (Actualizado para detectar keywords en inglés/español)
 function detectLanguage(text, currentLang) {
   const lower = norm(text);
-  // Si usa cualquiera de estas palabras en inglés, cambia el idioma a 'en'
   if (['hello', 'hi', 'hey', 'english', 'emergency', 'urgent', 'price', 'cost', 'estimate', 'clog', 'leak', 'heater', 'camera', 'appointment'].some(w => lower.includes(w))) return 'en';
-  // Si usa palabras en español, lo mantiene en 'es'
   if (['hola', 'buenas', 'saludos', 'español', 'espanol', 'emergencia', 'urgencia', 'urgente', 'precio', 'costo', 'destape', 'fuga', 'calentador', 'cita'].some(w => lower.includes(w))) return 'es';
   return currentLang;
 }
@@ -50,7 +49,6 @@ function isHello(text) {
   return ['hola', 'hello', 'hi', 'hey', 'buenas', 'saludos', 'start', 'inicio', 'menu', 'volver', 'back'].includes(lower);
 }
 
-// CEREBRO DE INTENCIONES
 function detectIntent(text) {
   const lower = norm(text);
   if (['emergencia', 'urgencia', 'emergency', 'urgent', 'urgente'].some(w => lower.includes(w))) return 'emergencia';
@@ -63,8 +61,8 @@ function detectIntent(text) {
   return null;
 }
 
-// GENERADOR DINÁMICO DE HORARIOS DE EMERGENCIA
-function getEmergencySlots() {
+// GENERADOR CON MEMORIA PARA NO REPETIR HORARIOS OCUPADOS
+async function getEmergencySlots() {
   const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
   const day = prTime.getDay(); 
   
@@ -83,6 +81,16 @@ function getEmergencySlots() {
     slots.push({ ymd: 'HOY', slot_en: '6:00 PM - 7:30 PM', slot_es: '6:00 PM - 7:30 PM', start_iso: `${dateStr}T18:00:00${prOffset}`, end_iso: `${dateStr}T19:30:00${prOffset}` });
     slots.push({ ymd: 'HOY', slot_en: '7:30 PM - 9:00 PM', slot_es: '7:30 PM - 9:00 PM', start_iso: `${dateStr}T19:30:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
   }
+
+  // Verificar la base de datos local para eliminar los horarios que ya se tomaron
+  try {
+    const bookedRows = await db.all("SELECT date_slot FROM emergency_bookings");
+    const bookedSet = new Set(bookedRows.map(r => r.date_slot));
+    slots = slots.filter(s => !bookedSet.has(s.start_iso)); // Solo deja los que están libres
+  } catch (e) {
+    console.error("Error filtrando slots de emergencia:", e);
+  }
+
   return slots;
 }
 
@@ -179,7 +187,6 @@ const handler = async (req, res) => {
   let row = await db.get('SELECT v FROM sessions WHERE k=?', key);
   let session = row ? JSON.parse(row.v) : { lang: 'es', step: 'menu', case_id: `DP-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}-${Math.floor(1000+Math.random()*9000)}` };
 
-  // Detecta idioma con la nueva regla que fuerza el inglés si ve palabras clave
   session.lang = detectLanguage(body, session.lang);
   
   const intent = detectIntent(lower);
@@ -256,11 +263,16 @@ const handler = async (req, res) => {
     await alertAdmin('new_lead', session, from);
 
     if (session.service === 'emergencia') {
-      const slots = getEmergencySlots();
-      session.slots = slots;
-      session.step = 'pick_slot';
-      const msgIntro = session.lang === 'en' ? "🚨 Emergency received. Please select a time for TODAY:\n\n" : "🚨 Emergencia recibida. Por favor selecciona un horario para HOY:\n\n";
-      responseMsg = msgIntro + formatSlots(session.lang, slots);
+      const slots = await getEmergencySlots(); // Se conecta a la base de datos local
+      if (slots.length > 0) {
+        session.slots = slots;
+        session.step = 'pick_slot';
+        const msgIntro = session.lang === 'en' ? "🚨 Emergency received. Please select a time for TODAY:\n\n" : "🚨 Emergencia recibida. Por favor selecciona un horario para HOY:\n\n";
+        responseMsg = msgIntro + formatSlots(session.lang, slots);
+      } else {
+        responseMsg = session.lang === 'en' ? "⚠️ All emergency slots for today are currently full. We will contact you ASAP." : "⚠️ Todos los espacios de emergencia para hoy están llenos. Te contactaremos lo antes posible.";
+        session.step = 'menu';
+      }
     } else {
       session.step = 'ask_schedule';
       responseMsg = askSchedule(session.lang);
@@ -296,6 +308,12 @@ const handler = async (req, res) => {
       
       if (bookRes && bookRes.ok) {
         session.appointment_start = chosen.start_iso;
+        
+        // NUEVO: Memoriza el espacio de emergencia para que no se duplique
+        if (session.service === 'emergencia') {
+          await db.run('INSERT OR IGNORE INTO emergency_bookings (date_slot, created_at) VALUES (?, ?)', chosen.start_iso, Date.now());
+        }
+
         await alertAdmin('booked', session, from);
         responseMsg = session.lang === 'en' ? `✅ Appointment confirmed!\n\nCase: ${session.case_id}\nWhen: ${chosen.ymd} — ${slotLabel}\n\nWe will contact you soon. Type "menu" to return.` : `✅ ¡Cita confirmada!\n\nCaso: ${session.case_id}\nCuándo: ${chosen.ymd} — ${slotLabel}\n\nTe estaremos contactando. Escribe "menu" para regresar.`;
       } else {
