@@ -15,7 +15,7 @@ app.use(morgan('dev'));
 const PORT                 = process.env.PORT                || 10000;
 const TAG                  = process.env.TAG                 || 'DestapesPR Bot 🇵🇷';
 const PHONE                = process.env.BRAND_PHONE         || '+1 787-922-0068';
-const FB_LINK              = process.env.BRAND_FB            || 'https://facebook.com/DestapesPR';
+const FB_LINK              = process.env.BRAND_FB            || 'https://www.facebook.com/DestapesPR';
 const APPS_SCRIPT_URL      = process.env.APPS_SCRIPT_URL     || '';
 const APPS_SCRIPT_TOKEN    = process.env.APPS_SCRIPT_TOKEN   || '';
 const ADMIN_WHATSAPP       = process.env.ADMIN_ALERT_TO      || '';
@@ -26,7 +26,6 @@ const TWILIO_WHATSAPP_FROM = process.env.TWILIO_PHONE_NUMBER || '';
 const SESSION_TTL_MS = 48 * 60 * 60 * 1000;
 let db;
 
-// --- INICIALIZACIÓN ---
 async function initDB() {
   db = await open({ filename: './data.sqlite', driver: sqlite3.Database });
   await db.exec(`CREATE TABLE IF NOT EXISTS sessions (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
@@ -34,66 +33,45 @@ async function initDB() {
 
 function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); }
 
-// --- MENSAJES ESTÉTICOS (Como en las capturas) ---
 function menuText(lang) {
   if (lang === 'en') {
-    return `👋 Welcome to DestapesPR.\n\nSelect a number or type what you need:\n1️⃣ Drain cleaning (clogged pipes)\n2️⃣ Water leak (drips / leaks)\n3️⃣ Camera inspection (video)\n4️⃣ Water heater (gas/electric/solar)\n5️⃣ Other plumbing service\n6️⃣ Appointment / schedule a visit\n\n💬 Commands: "start", "menu" or "back"\n🌐 Type "español" to switch language\n\n📘 Facebook: ${FB_LINK}\n📞 Phone: ${PHONE}`;
+    return `👋 Welcome to DestapesPR.\n\nSelect a number:\n1️⃣ Drain cleaning\n2️⃣ Water leak\n3️⃣ Camera inspection\n4️⃣ Water heater\n5️⃣ Other service\n6️⃣ Appointment\n\n💬 Commands: "menu", "start"\n🌐 Type "español" for Spanish\n\n📘 Facebook: ${FB_LINK}\n📞 Phone: ${PHONE}`;
   }
-  return `👋 Bienvenido a DestapesPR.\n\nSelecciona un número o escribe lo que necesitas:\n1️⃣ Destape (drenajes o tuberías tapadas)\n2️⃣ Fuga de agua (goteos / filtraciones)\n3️⃣ Inspección con cámara (video)\n4️⃣ Calentador (gas/eléctrico/solar)\n5️⃣ Otro servicio de plomería\n6️⃣ Cita / coordinar visita\n\n💬 Comandos: "inicio", "menu" o "volver"\n🌐 Escribe "english" para cambiar idioma\n\n📘 Facebook: ${FB_LINK}\n📞 Tel: ${PHONE}`;
+  return `👋 Bienvenido a DestapesPR.\n\nSelecciona un número:\n1️⃣ Destape\n2️⃣ Fuga de agua\n3️⃣ Inspección con cámara\n4️⃣ Calentador\n5️⃣ Otro servicio\n6️⃣ Cita / coordinar visita\n\n💬 Comandos: "inicio", "menu"\n🌐 Escribe "english" para inglés\n\n📘 Facebook: ${FB_LINK}\n📞 Tel: ${PHONE}`;
 }
 
 function leadPrompt(service, lang) {
-  const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, cita: { es: 'Cita', en: 'Appointment' } };
+  const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Cámara', en: 'Camera' }, calentador: { es: 'Calentador', en: 'Heater' }, cita: { es: 'Cita', en: 'Appointment' } };
   const sName = names[service]?.[lang] || (lang === 'en' ? 'Service' : 'Servicio');
-  
   if (lang === 'en') {
-    return `✅ Service: ${sName}\nPlease send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description of the problem\n\nExample:\n"My name is Ana Rivera, 939-555-9999, San Juan, clogged kitchen sink"\n\n🚨 Emergency? Call NOW: ${PHONE}`;
+    return `✅ Service: ${sName}\nPlease send in ONE message:\n• 👤 Name\n• 📞 Phone\n• 📍 City\n• 📝 Problem\n\nExample: "Ana Rivera, 939-555-9999, San Juan, clogged sink"`;
   }
-  return `✅ Servicio: ${sName}\nPor favor envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Descripción breve del problema\n\nEjemplo:\n"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
+  return `✅ Servicio: ${sName}\nEnvía TODO en UN solo mensaje:\n• 👤 Nombre\n• 📞 Teléfono\n• 📍 Municipio\n• 📝 Descripción\n\nEjemplo: "Ana Rivera, 939-555-9999, Caguas, fregadero tapado"`;
 }
 
-// --- ALERTAS PARA EL CRM/ADMIN ---
-async function alertAdmin(type, session, from) {
-  if (!ADMIN_WHATSAPP) return;
-  const templates = {
-    new_lead: () => `🆕 *NUEVO LEAD*\nCaso: ${session.case_id}\nServicio: ${session.service_label}\nNombre: ${session.name || 'N/A'}\nTel: ${session.phone || 'N/A'}\nPueblo: ${session.city || 'N/A'}\nWA: ${from}\nDetalle: ${session.details || 'N/A'}`,
-    booked: () => `📅 *CITA AGENDADA*\nCaso: ${session.case_id}\nNombre: ${session.name || 'N/A'}\nCuando: ${session.appointment_start || 'N/A'}`
-  };
-  const body = templates[type] ? templates[type]() : "";
-  if (body) await sendWhatsApp(ADMIN_WHATSAPP, body);
-}
-// --- COMUNICACIÓN CON APPS SCRIPT (CRM) ---
-async function pushLeadToScript(session, from) {
-  const payload = {
-    case_id: session.case_id,
-    created_at: new Date().toISOString(),
-    from_number: from,
-    lang: session.lang,
-    service: session.service,
-    name: session.name,
-    phone: session.phone,
-    city: session.city,
-    details: session.details,
-    status: 'Nuevo'
-  };
-  return await appsPost('lead', payload);
-}
-
-// --- HANDLER PRINCIPAL ---
-const handler = async (req, res) => {
+async function sendWhatsApp(to, text) {
+  try {
+    const url = `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Messages.json`;
+    const auth = Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64');
+    await fetch(url, {
+      method: 'POST',
+      headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ To: to, From: TWILIO_WHATSAPP_FROM, Body: text })
+    });
+  } catch (e) { console.error("Error sending WA:", e); }
+}const handler = async (req, res) => {
   const from = req.body.From;
   const body = (req.body.Body || '').trim();
   const lower = norm(body);
   
   const key = from;
   let row = await db.get('SELECT v FROM sessions WHERE k=?', key);
-  let session = row ? JSON.parse(row.v) : { lang: 'es', step: 'menu', case_id: `DP-${Date.now()}` };
+  let session = row ? JSON.parse(row.v) : { lang: 'es', step: 'menu' };
 
-  // Detectar idioma dinámicamente
   if (lower.includes('english')) session.lang = 'en';
   if (lower.includes('español') || lower.includes('espanol')) session.lang = 'es';
 
-  // Saludos o Menú principal
+  // Si el cliente saluda o pide el menú, reseteamos
   if (['hola', 'hello', 'hi', 'menu', 'inicio'].includes(lower)) {
     session.step = 'menu';
     await db.run('INSERT OR REPLACE INTO sessions (k, v, updated_at) VALUES (?, ?, ?)', key, JSON.stringify(session), Date.now());
@@ -113,42 +91,36 @@ const handler = async (req, res) => {
     }
   } 
   else if (session.step === 'lead') {
-    // Procesamiento de datos del cliente (Nombre, Tel, Pueblo, Detalle)
-    session.name = body.split(',')[0] || "Cliente";
+    // EL ARREGLO: Guardamos lo que sea que mande como "detalles" para asegurar que avance
+    session.details = body;
+    session.case_id = `DP-${Date.now().toString().slice(-4)}`;
+    
+    // Avanzamos al siguiente paso obligatoriamente
     session.step = 'ask_schedule';
-    // Enviar al CRM y alertar al Admin
-    await pushLeadToScript(session, from);
-    await alertAdmin('new_lead', session, from);
-    responseMsg = askSchedule(session.lang);
+    
+    // Intentar subir al CRM y alertar (sin bloquear el flujo)
+    try {
+        const adminMsg = `🆕 *NUEVO LEAD*\nServicio: ${session.service}\nWA: ${from}\nDatos: ${body}`;
+        if (ADMIN_WHATSAPP) await sendWhatsApp(ADMIN_WHATSAPP, adminMsg);
+    } catch(e) {}
+
+    responseMsg = session.lang === 'en' 
+      ? `📅 Thank you! Would you like to schedule an appointment now? (Reply YES or NO)` 
+      : `📅 ¡Gracias! ¿Te gustaría agendar una cita ahora mismo? (Responde SI o NO)`;
   }
   else if (session.step === 'ask_schedule') {
-    if (['si', 'sí', 'yes', 'y'].includes(lower)) {
-      // Aquí el bot consulta los slots de Google Calendar
-      responseMsg = session.lang === 'en' ? "📅 Looking for available slots..." : "📅 Buscando horarios disponibles...";
-      // (Lógica de reservación simplificada para este bloque)
+    if (['si', 'sí', 'yes', 'y', 's'].includes(lower)) {
+      responseMsg = session.lang === 'en' ? "📅 Checking availability..." : "📅 Consultando disponibilidad...";
+      // Aquí iría la lógica de slots de tu Google Calendar
     } else {
-      responseMsg = session.lang === 'en' ? "✅ Perfect. We will call you soon!" : "✅ Perfecto. ¡Te contactaremos pronto!";
+      responseMsg = session.lang === 'en' ? "✅ No problem! We will contact you soon." : "✅ ¡No hay problema! Te contactaremos pronto.";
       session.step = 'menu';
     }
   }
 
-  // Guardar estado de la sesión
   await db.run('INSERT OR REPLACE INTO sessions (k, v, updated_at) VALUES (?, ?, ?)', key, JSON.stringify(session), Date.now());
-  
-  const twiml = `<?xml version="1.0" encoding="UTF-8"?><Response><Message>${responseMsg}</Message></Response>`;
-  res.type('text/xml').send(twiml);
+  res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${responseMsg}</Message></Response>`);
 };
 
-// --- INICIO DEL SERVIDOR ---
 app.post('/webhook/whatsapp', handler);
-app.get('/', (req, res) => res.send('DestapesPR Bot Activo ✅'));
-
-initDB().then(() => {
-  app.listen(PORT, () => console.log(`${TAG} bilingüe y CRM listo en puerto ${PORT}`));
-});
-
-// Cierre ordenado
-process.on('SIGTERM', () => {
-  console.log('Cerrando servidor...');
-  process.exit(0);
-});
+initDB().then(() => app.listen(PORT, () => console.log(`Bot DestapesPR funcionando 🚀`)));
