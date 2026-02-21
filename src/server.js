@@ -31,15 +31,15 @@ function log(level, msg, meta = {}) {
 async function initDB() {
   db = await open({ filename: './data.sqlite', driver: sqlite3.Database });
   await db.exec(`CREATE TABLE IF NOT EXISTS sessions (k TEXT PRIMARY KEY, v TEXT NOT NULL, updated_at INTEGER NOT NULL);`);
-  // NUEVO: Memoria interna para bloquear horarios de emergencia ya tomados
   await db.exec(`CREATE TABLE IF NOT EXISTS emergency_bookings (date_slot TEXT PRIMARY KEY, created_at INTEGER);`);
 }
 
 function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); }
 
+// CEREBRO DE IDIOMAS (Más robusto en inglés)
 function detectLanguage(text, currentLang) {
   const lower = norm(text);
-  if (['hello', 'hi', 'hey', 'english', 'emergency', 'urgent', 'price', 'cost', 'estimate', 'clog', 'leak', 'heater', 'camera', 'appointment'].some(w => lower.includes(w))) return 'en';
+  if (['hello', 'hi', 'hey', 'english', 'emergency', 'emergencies', 'urgent', 'asap', 'price', 'cost', 'estimate', 'clog', 'leak', 'heater', 'camera', 'appointment'].some(w => lower.includes(w))) return 'en';
   if (['hola', 'buenas', 'saludos', 'español', 'espanol', 'emergencia', 'urgencia', 'urgente', 'precio', 'costo', 'destape', 'fuga', 'calentador', 'cita'].some(w => lower.includes(w))) return 'es';
   return currentLang;
 }
@@ -49,9 +49,10 @@ function isHello(text) {
   return ['hola', 'hello', 'hi', 'hey', 'buenas', 'saludos', 'start', 'inicio', 'menu', 'volver', 'back'].includes(lower);
 }
 
+// CEREBRO DE INTENCIONES (Añadidas variaciones en inglés)
 function detectIntent(text) {
   const lower = norm(text);
-  if (['emergencia', 'urgencia', 'emergency', 'urgent', 'urgente'].some(w => lower.includes(w))) return 'emergencia';
+  if (['emergencia', 'urgencia', 'urgente', 'emergency', 'emergencies', 'urgent', 'asap'].some(w => lower.includes(w))) return 'emergencia';
   if (['precio', 'costo', 'estimado', 'cuanto', 'sale', 'price', 'cost', 'estimate', 'how much'].some(w => lower.includes(w))) return 'precio';
   if (['destape', 'tapado', 'inodoro', 'fregadero', 'tuberia', 'clog', 'clogged', 'drain', 'toilet', 'sink'].some(w => lower.includes(w))) return 'destape';
   if (['fuga', 'goteo', 'rota', 'filtra', 'leak', 'leaking', 'broken'].some(w => lower.includes(w))) return 'fuga';
@@ -61,7 +62,7 @@ function detectIntent(text) {
   return null;
 }
 
-// GENERADOR CON MEMORIA PARA NO REPETIR HORARIOS OCUPADOS
+// GENERADOR DE HORARIOS
 async function getEmergencySlots() {
   const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
   const day = prTime.getDay(); 
@@ -82,14 +83,11 @@ async function getEmergencySlots() {
     slots.push({ ymd: 'HOY', slot_en: '7:30 PM - 9:00 PM', slot_es: '7:30 PM - 9:00 PM', start_iso: `${dateStr}T19:30:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
   }
 
-  // Verificar la base de datos local para eliminar los horarios que ya se tomaron
   try {
     const bookedRows = await db.all("SELECT date_slot FROM emergency_bookings");
     const bookedSet = new Set(bookedRows.map(r => r.date_slot));
-    slots = slots.filter(s => !bookedSet.has(s.start_iso)); // Solo deja los que están libres
-  } catch (e) {
-    console.error("Error filtrando slots de emergencia:", e);
-  }
+    slots = slots.filter(s => !bookedSet.has(s.start_iso));
+  } catch (e) { console.error(e); }
 
   return slots;
 }
@@ -263,7 +261,7 @@ const handler = async (req, res) => {
     await alertAdmin('new_lead', session, from);
 
     if (session.service === 'emergencia') {
-      const slots = await getEmergencySlots(); // Se conecta a la base de datos local
+      const slots = await getEmergencySlots();
       if (slots.length > 0) {
         session.slots = slots;
         session.step = 'pick_slot';
@@ -309,17 +307,20 @@ const handler = async (req, res) => {
       if (bookRes && bookRes.ok) {
         session.appointment_start = chosen.start_iso;
         
-        // NUEVO: Memoriza el espacio de emergencia para que no se duplique
         if (session.service === 'emergencia') {
           await db.run('INSERT OR IGNORE INTO emergency_bookings (date_slot, created_at) VALUES (?, ?)', chosen.start_iso, Date.now());
         }
 
         await alertAdmin('booked', session, from);
         responseMsg = session.lang === 'en' ? `✅ Appointment confirmed!\n\nCase: ${session.case_id}\nWhen: ${chosen.ymd} — ${slotLabel}\n\nWe will contact you soon. Type "menu" to return.` : `✅ ¡Cita confirmada!\n\nCaso: ${session.case_id}\nCuándo: ${chosen.ymd} — ${slotLabel}\n\nTe estaremos contactando. Escribe "menu" para regresar.`;
+        session.step = 'menu'; // Éxito, vuelve al inicio
       } else {
-        responseMsg = session.lang === 'en' ? `❌ We couldn't book that slot. Try again or call: ${PHONE}` : `❌ No pudimos reservar ese horario. Intenta de nuevo o llámanos: ${PHONE}`;
+        // CORRECCIÓN: Si falla la reservación, NO te saca. Te pide otro número.
+        responseMsg = session.lang === 'en' 
+          ? `❌ That slot is no longer available.\n\nPlease choose a different number:\n\n${formatSlots(session.lang, slots)}` 
+          : `❌ Ese horario ya se ocupó.\n\nPor favor escoge un número diferente:\n\n${formatSlots(session.lang, slots)}`;
+        // session.step se queda en 'pick_slot' para que el cliente intente de nuevo sin repetir el proceso
       }
-      session.step = 'menu';
     }
   }
 
