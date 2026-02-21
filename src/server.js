@@ -36,7 +36,6 @@ async function initDB() {
 
 function norm(s) { return String(s || '').trim().toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, ''); }
 
-// CEREBRO DE IDIOMAS (Más robusto en inglés)
 function detectLanguage(text, currentLang) {
   const lower = norm(text);
   if (['hello', 'hi', 'hey', 'english', 'emergency', 'emergencies', 'urgent', 'asap', 'price', 'cost', 'estimate', 'clog', 'leak', 'heater', 'camera', 'appointment'].some(w => lower.includes(w))) return 'en';
@@ -49,7 +48,6 @@ function isHello(text) {
   return ['hola', 'hello', 'hi', 'hey', 'buenas', 'saludos', 'start', 'inicio', 'menu', 'volver', 'back'].includes(lower);
 }
 
-// CEREBRO DE INTENCIONES (Añadidas variaciones en inglés)
 function detectIntent(text) {
   const lower = norm(text);
   if (['emergencia', 'urgencia', 'urgente', 'emergency', 'emergencies', 'urgent', 'asap'].some(w => lower.includes(w))) return 'emergencia';
@@ -62,7 +60,6 @@ function detectIntent(text) {
   return null;
 }
 
-// GENERADOR DE HORARIOS
 async function getEmergencySlots() {
   const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
   const day = prTime.getDay(); 
@@ -313,13 +310,29 @@ const handler = async (req, res) => {
 
         await alertAdmin('booked', session, from);
         responseMsg = session.lang === 'en' ? `✅ Appointment confirmed!\n\nCase: ${session.case_id}\nWhen: ${chosen.ymd} — ${slotLabel}\n\nWe will contact you soon. Type "menu" to return.` : `✅ ¡Cita confirmada!\n\nCaso: ${session.case_id}\nCuándo: ${chosen.ymd} — ${slotLabel}\n\nTe estaremos contactando. Escribe "menu" para regresar.`;
-        session.step = 'menu'; // Éxito, vuelve al inicio
+        session.step = 'menu';
       } else {
-        // CORRECCIÓN: Si falla la reservación, NO te saca. Te pide otro número.
-        responseMsg = session.lang === 'en' 
-          ? `❌ That slot is no longer available.\n\nPlease choose a different number:\n\n${formatSlots(session.lang, slots)}` 
-          : `❌ Ese horario ya se ocupó.\n\nPor favor escoge un número diferente:\n\n${formatSlots(session.lang, slots)}`;
-        // session.step se queda en 'pick_slot' para que el cliente intente de nuevo sin repetir el proceso
+        // CORRECCIÓN MAGISTRAL
+        // 1. Guardamos el horario malo en memoria para que no le salga a nadie más
+        if (session.service === 'emergencia') {
+          await db.run('INSERT OR IGNORE INTO emergency_bookings (date_slot, created_at) VALUES (?, ?)', chosen.start_iso, Date.now());
+        }
+        
+        // 2. Borramos el horario malo de la lista de opciones de ESTE cliente
+        session.slots = session.slots.filter(s => s.start_iso !== chosen.start_iso);
+        
+        // 3. Le mostramos la lista actualizada SIN sacarlo al menú principal
+        if (session.slots.length > 0) {
+            responseMsg = session.lang === 'en' 
+              ? `❌ That slot is no longer available.\n\nPlease choose a different number:\n\n${formatSlots(session.lang, session.slots)}` 
+              : `❌ Ese horario ya se ocupó.\n\nPor favor escoge un número diferente:\n\n${formatSlots(session.lang, session.slots)}`;
+            // NO cambiamos session.step, se queda en 'pick_slot' para que responda de nuevo
+        } else {
+            responseMsg = session.lang === 'en' 
+              ? `❌ We are sorry, all emergency slots were just taken. We will contact you ASAP.` 
+              : `❌ Lo sentimos, todos los espacios de emergencia se acaban de ocupar. Te contactaremos lo antes posible.`;
+            session.step = 'menu';
+        }
       }
     }
   }
