@@ -59,6 +59,14 @@ function menuText(lang) {
   return `👋 Bienvenido a DestapesPR.\n\nSelecciona un número o escribe lo que necesitas:\n1️⃣ Destape (drenajes o tuberías tapadas)\n2️⃣ Fuga de agua (goteos / filtraciones)\n3️⃣ Inspección con cámara (video)\n4️⃣ Calentador (gas/eléctrico/solar)\n5️⃣ Otro servicio de plomería\n6️⃣ Cita / coordinar visita\n\n💬 Comandos: "inicio", "menu" o "volver"\n🌐 Escribe "english" para cambiar idioma\n\n📘 Facebook: ${FB_LINK}\n📞 Tel: ${PHONE}`;
 }
 
+// EL NUEVO MENÚ DE CALENTADORES
+function heaterMenuText(lang) {
+  if (lang === 'en') {
+    return `🔥 Please select the type of water heater:\n\n1️⃣ Solar\n2️⃣ Gas\n3️⃣ Tankless / Electric (Line)\n\nReply with a number (1-3) or type "menu" to return.`;
+  }
+  return `🔥 Por favor selecciona el tipo de calentador:\n\n1️⃣ Solar\n2️⃣ De gas\n3️⃣ Eléctrico / De línea\n\nResponde con un número (1-3) o escribe "menu" para regresar.`;
+}
+
 function leadPrompt(service, lang) {
   const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, cita: { es: 'Cita', en: 'Appointment' }, otro: { es: 'Otro', en: 'Other' } };
   const sName = names[service]?.[lang] || names['otro'][lang];
@@ -143,12 +151,34 @@ const handler = async (req, res) => {
     if (choices[body]) {
       session.service = choices[body];
       session.service_label = session.lang === 'en' ? serviceLabels[session.service] : serviceLabelsEs[session.service];
-      session.step = 'lead';
-      responseMsg = leadPrompt(session.service, session.lang);
+      
+      // Si elige calentador (4), pasa al sub-menú de calentadores
+      if (session.service === 'calentador') {
+        session.step = 'heater_type';
+        responseMsg = heaterMenuText(session.lang);
+      } else {
+        session.step = 'lead';
+        responseMsg = leadPrompt(session.service, session.lang);
+      }
     } else {
       responseMsg = menuText(session.lang);
     }
   } 
+  else if (session.step === 'heater_type') {
+    const heaterTypes = { '1': 'Solar', '2': 'Gas', '3': 'Línea / Eléctrico' };
+    const heaterTypesEn = { '1': 'Solar', '2': 'Gas', '3': 'Tankless / Electric' };
+    
+    if (heaterTypes[body]) {
+      session.heater_type = session.lang === 'en' ? heaterTypesEn[body] : heaterTypes[body];
+      // Añade el tipo de calentador al nombre del servicio (Ej. "Calentador (Solar)")
+      session.service_label = `${session.service_label} (${session.heater_type})`;
+      session.step = 'lead';
+      // Pasamos 'calentador' modificado para que leadPrompt muestre el nombre completo en el título
+      responseMsg = leadPrompt(session.service, session.lang).replace("✅ Servicio: Calentador", `✅ Servicio: Calentador (${session.heater_type})`).replace("✅ Service: Water heater", `✅ Service: Water heater (${session.heater_type})`);
+    } else {
+      responseMsg = heaterMenuText(session.lang);
+    }
+  }
   else if (session.step === 'lead') {
     // Evita bloqueos: Toma la info, la extrae como pueda, y SIEMPRE avanza
     const extracted = parseLead(body);
@@ -213,5 +243,5 @@ app.post('/webhook/whatsapp', handler);
 app.get('/', (req, res) => res.send('DestapesPR Bot Activo ✅'));
 
 initDB().then(() => {
-  app.listen(PORT, () => console.log(`${TAG} Bilingüe, CRM y Calendar activo 🚀`));
+  app.listen(PORT, () => console.log(`${TAG} Bilingüe, CRM, Calendar y Submenú de Calentadores activo 🚀`));
 });
