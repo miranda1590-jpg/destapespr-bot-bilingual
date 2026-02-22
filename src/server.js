@@ -198,7 +198,7 @@ const handler = async (req, res) => {
     if (intent && !isHello(body)) {
       session.step = 'menu';
     } else {
-      // LA CURA: WIPE DE MEMORIA PARA GENERAR UN CASO NUEVO 
+      // WIPE DE MEMORIA PARA GENERAR UN CASO NUEVO 
       session = { 
         lang: session.lang, // Recuerda el idioma
         step: 'menu', 
@@ -273,9 +273,9 @@ const handler = async (req, res) => {
       let slots = await getEmergencySlots(false); // Busca los de HOY primero
       
       const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
-      // JUGADA MAESTRA: Si hoy es sábado (6) y se llenaron los de hoy, busca los de mañana (domingo)
+      // Si hoy es sábado (6) y se llenaron los de hoy, busca los de mañana (domingo)
       if (slots.length === 0 && prTime.getDay() === 6) {
-          slots = await getEmergencySlots(true); // Busca los de mañana
+          slots = await getEmergencySlots(true); 
       }
 
       if (slots.length > 0) {
@@ -341,6 +341,7 @@ const handler = async (req, res) => {
       
       const bookRes = await appsPost('book', { case_id: session.case_id, name: session.name, phone: session.phone, city: session.city, from_number: from, service_label: session.service_label, details: session.details, start_iso: chosen.start_iso, end_iso: chosen.end_iso });
       
+      // 🛡️ CONFIRMACIÓN CORREGIDA 
       if (bookRes && bookRes.ok) {
         session.appointment_start = chosen.start_iso;
         
@@ -349,7 +350,11 @@ const handler = async (req, res) => {
         }
 
         await alertAdmin('booked', session, from);
-        responseMsg = session.lang === 'en' ? `✅ Appointment confirmed!\n\nCase: ${session.case_id}\nWhen: ${chosen.ymd === 'HOY' || chosen.ymd === 'MAÑANA' ? (lang === 'en' ? chosen.ymd_en : chosen.ymd) : chosen.ymd} — ${slotLabel}\n\nWe will contact you soon. Type "menu" to return.` : `✅ ¡Cita confirmada!\n\nCaso: ${session.case_id}\nCuándo: ${chosen.ymd === 'HOY' || chosen.ymd === 'MAÑANA' ? chosen.ymd : chosen.ymd} — ${slotLabel}\n\nTe estaremos contactando. Escribe "menu" para regresar.`;
+        
+        responseMsg = session.lang === 'en' 
+          ? `✅ Appointment confirmed!\n\nCase: ${session.case_id}\nWhen: ${chosen.ymd === 'HOY' || chosen.ymd === 'MAÑANA' ? chosen.ymd_en : chosen.ymd} — ${slotLabel}\n\nWe will contact you soon. Type "menu" to return.` 
+          : `✅ ¡Cita confirmada!\n\nCaso: ${session.case_id}\nCuándo: ${chosen.ymd === 'HOY' || chosen.ymd === 'MAÑANA' ? chosen.ymd : chosen.ymd} — ${slotLabel}\n\nTe estaremos contactando. Escribe "menu" para regresar.`;
+        
         session.step = 'menu';
       } else {
         
