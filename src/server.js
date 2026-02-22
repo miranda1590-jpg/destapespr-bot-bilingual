@@ -60,10 +60,10 @@ function detectIntent(text) {
   return null;
 }
 
-// Generador dinámico para HOY o MAÑANA (Ajustado domingo a las 10am)
+// Generador dinámico para HOY o MAÑANA
 async function getEmergencySlots(forTomorrow = false) {
   const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
-  if (forTomorrow) prTime.setDate(prTime.getDate() + 1); // Adelanta un día si se le pide
+  if (forTomorrow) prTime.setDate(prTime.getDate() + 1); 
   
   const day = prTime.getDay(); 
   const yyyy = prTime.getFullYear();
@@ -76,11 +76,11 @@ async function getEmergencySlots(forTomorrow = false) {
   const ymdEn = forTomorrow ? 'TOMORROW' : 'TODAY';
 
   let slots = [];
-  if (day === 0) { // DOMINGO (Empezando a las 10:00 AM)
+  if (day === 0) { 
     slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '10:00 AM - 1:00 PM', slot_es: '10:00 AM - 1:00 PM', start_iso: `${dateStr}T10:00:00${prOffset}`, end_iso: `${dateStr}T13:00:00${prOffset}` });
     slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '1:00 PM - 5:00 PM', slot_es: '1:00 PM - 5:00 PM', start_iso: `${dateStr}T13:00:00${prOffset}`, end_iso: `${dateStr}T17:00:00${prOffset}` });
     slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '5:00 PM - 9:00 PM', slot_es: '5:00 PM - 9:00 PM', start_iso: `${dateStr}T17:00:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
-  } else { // LUNES - SÁBADO (6pm - 9pm)
+  } else { 
     slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '6:00 PM - 7:30 PM', slot_es: '6:00 PM - 7:30 PM', start_iso: `${dateStr}T18:00:00${prOffset}`, end_iso: `${dateStr}T19:30:00${prOffset}` });
     slots.push({ ymd: ymdEs, ymd_en: ymdEn, slot_en: '7:30 PM - 9:00 PM', slot_es: '7:30 PM - 9:00 PM', start_iso: `${dateStr}T19:30:00${prOffset}`, end_iso: `${dateStr}T21:00:00${prOffset}` });
   }
@@ -136,7 +136,6 @@ function askSchedule(lang) {
   return lang === 'en' ? `📅 Do you want to schedule an appointment now?\n\nReply YES or NO\n\n🚨 Emergency? Call now: ${PHONE}` : `📅 ¿Quieres agendar una cita ahora?\n\nResponde SI o NO\n\n🚨 ¿Emergencia? Llama ahora: ${PHONE}`;
 }
 
-// Formateador adaptado a HOY, MAÑANA o Fecha Regular
 function formatSlots(lang, slots) { 
   const lines = [lang === 'en' ? `📅 Available slots:` : `📅 Horarios disponibles:`, '']; 
   for (let i = 0; i < slots.length; i++) { 
@@ -198,9 +197,8 @@ const handler = async (req, res) => {
     if (intent && !isHello(body)) {
       session.step = 'menu';
     } else {
-      // WIPE DE MEMORIA PARA GENERAR UN CASO NUEVO 
       session = { 
-        lang: session.lang, // Recuerda el idioma
+        lang: session.lang,
         step: 'menu', 
         case_id: `DP-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}-${Math.floor(1000+Math.random()*9000)}` 
       };
@@ -221,6 +219,9 @@ const handler = async (req, res) => {
     if (selectedService) {
       session.service = selectedService;
       session.service_label = session.lang === 'en' ? serviceLabels[session.service] : serviceLabelsEs[session.service];
+      
+      // 🚀 LA CURA: Forzar un caso nuevo automáticamente CADA VEZ que el cliente inicia un servicio
+      session.case_id = `DP-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}-${Math.floor(1000+Math.random()*9000)}`;
       
       if (session.service === 'calentador') {
         session.step = 'heater_type';
@@ -270,10 +271,9 @@ const handler = async (req, res) => {
     await alertAdmin('new_lead', session, from);
 
     if (session.service === 'emergencia') {
-      let slots = await getEmergencySlots(false); // Busca los de HOY primero
+      let slots = await getEmergencySlots(false); 
       
       const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
-      // Si hoy es sábado (6) y se llenaron los de hoy, busca los de mañana (domingo)
       if (slots.length === 0 && prTime.getDay() === 6) {
           slots = await getEmergencySlots(true); 
       }
@@ -341,7 +341,6 @@ const handler = async (req, res) => {
       
       const bookRes = await appsPost('book', { case_id: session.case_id, name: session.name, phone: session.phone, city: session.city, from_number: from, service_label: session.service_label, details: session.details, start_iso: chosen.start_iso, end_iso: chosen.end_iso });
       
-      // 🛡️ CONFIRMACIÓN CORREGIDA 
       if (bookRes && bookRes.ok) {
         session.appointment_start = chosen.start_iso;
         
