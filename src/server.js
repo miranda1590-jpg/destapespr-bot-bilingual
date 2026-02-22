@@ -100,7 +100,6 @@ function menuText(lang) {
   return `👋 Bienvenido a DestapesPR.\n\nSelecciona un número o escribe lo que necesitas:\n1️⃣ Destape (drenajes o tuberías tapadas)\n2️⃣ Fuga de agua (goteos / filtraciones)\n3️⃣ Inspección con cámara (video)\n4️⃣ Calentador (gas/eléctrico/solar)\n5️⃣ Otro servicio de plomería\n6️⃣ Cita / coordinar visita\n\n💬 Comandos: "inicio", "menu" o "volver"\n🌐 Escribe "english" para cambiar idioma\n\n📘 Facebook: ${FB_LINK}\n📞 Tel: ${PHONE}`;
 }
 
-// NUEVAS FUNCIONES DE PROPIEDAD
 function propertyMenuText(lang) {
   if (lang === 'en') return `🏢 Is this service for a Residential or Commercial property?\n\n1️⃣ Residential\n2️⃣ Commercial\n\nReply with 1 or 2.`;
   return `🏢 ¿Este servicio es para una propiedad Residencial o Comercial?\n\n1️⃣ Residencial\n2️⃣ Comercial\n\nResponde con 1 o 2.`;
@@ -118,29 +117,43 @@ function heaterMenuText(lang) {
   return `🔥 Por favor selecciona el tipo de calentador:\n\n1️⃣ Solar\n2️⃣ De gas\n3️⃣ Eléctrico / De línea\n\nResponde con un número (1-3) o escribe "menu" para regresar.`;
 }
 
+// 🎯 ESTÉTICA DINÁMICA: Cambia ejemplo y campos según Residencial/Comercial
 function leadPrompt(service, lang, propertyType) {
   const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, cita: { es: 'Cita', en: 'Appointment' }, otro: { es: 'Otro', en: 'Other' }, precio: { es: 'Estimado / Visita', en: 'Estimate / Visit' }, emergencia: { es: 'Emergencia', en: 'Emergency' } };
   const sName = names[service]?.[lang] || names['otro'][lang];
   
+  const isComercial = (propertyType === 'Commercial' || propertyType === 'Comercial');
+  const nameFieldEs = isComercial ? 'Nombre / Nombre del negocio' : 'Nombre completo';
+  const nameFieldEn = isComercial ? 'Name / Business name' : 'Full name';
+  
   if (service === 'emergencia') {
-    const price = (propertyType === 'Commercial' || propertyType === 'Comercial') ? '$350' : '$250';
+    const price = isComercial ? '$350' : '$250';
     if (lang === 'en') {
-      return `🚨 Service: ${sName}\n\n⚠️ Emergency services for this property type have an initial cost of ${price}.\n\nTo assist you immediately, please send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the emergency\n\n🚨 Emergency? Call NOW: ${PHONE}`;
+      return `🚨 Service: ${sName}\n\n⚠️ Emergency services for this property type have an initial cost of ${price}.\n\nTo assist you immediately, please send EVERYTHING in ONE message:\n• 👤 ${nameFieldEn}\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the emergency\n\n🚨 Emergency? Call NOW: ${PHONE}`;
     }
-    return `🚨 Servicio: ${sName}\n\n⚠️ Las emergencias para este tipo de propiedad tienen un costo inicial de ${price} dólares.\n\nPara atenderte lo más pronto posible, envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción de la emergencia\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
+    return `🚨 Servicio: ${sName}\n\n⚠️ Las emergencias para este tipo de propiedad tienen un costo inicial de ${price} dólares.\n\nPara atenderte lo más pronto posible, envía TODO en UN solo mensaje:\n• 👤 ${nameFieldEs}\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción de la emergencia\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
   }
 
   if (service === 'precio') {
     if (lang === 'en') {
-      return `✅ Service: ${sName}\n\n💵 For costs and estimates, please tell us the service needed and send photos of the area.\n\n🛠️ If you want us to visit you, the evaluation visit has a cost of $80 (which is deducted from the final cost of any service performed).\n\nTo schedule your visit, please send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the problem\n\n🚨 Emergency? Call NOW: ${PHONE}`;
+      return `✅ Service: ${sName}\n\n💵 For costs and estimates, please tell us the service needed and send photos of the area.\n\n🛠️ If you want us to visit you, the evaluation visit has a cost of $80 (which is deducted from the final cost of any service performed).\n\nTo schedule your visit, please send EVERYTHING in ONE message:\n• 👤 ${nameFieldEn}\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the problem\n\n🚨 Emergency? Call NOW: ${PHONE}`;
     }
-    return `✅ Servicio: ${sName}\n\n💵 Para costo y/o estimados de servicios, déjanos un mensaje con el servicio a estimar y fotos del área a trabajar.\n\n🛠️ Si deseas que lo visitemos, la visita tiene un costo de $80 dólares (que se deducen del costo de cualquier servicio que se realice).\n\nPara agendar tu visita, envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción del problema\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
+    return `✅ Servicio: ${sName}\n\n💵 Para costo y/o estimados de servicios, déjanos un mensaje con el servicio a estimar y fotos del área a trabajar.\n\n🛠️ Si deseas que lo visitemos, la visita tiene un costo de $80 dólares (que se deducen del costo de cualquier servicio que se realice).\n\nPara agendar tu visita, envía TODO en UN solo mensaje:\n• 👤 ${nameFieldEs}\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción del problema\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
   }
 
+  // Textos de ejemplo dinámicos
+  const exampleEn = isComercial 
+    ? '"Restaurant El Sabor, 939-555-1111, San Juan, clogged main drain in the kitchen"'
+    : '"My name is Ana Rivera, 939-555-9999, San Juan, clogged kitchen sink"';
+    
+  const exampleEs = isComercial
+    ? '"Panadería El Sabor, 939-555-1111, San Juan, tubería principal tapada en la cocina"'
+    : '"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"';
+
   if (lang === 'en') {
-    return `✅ Service: ${sName}\n\nPlease send EVERYTHING in ONE message:\n• 👤 Full name\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description of the problem\n\nExample:\n"My name is Ana Rivera, 939-555-9999, San Juan, clogged kitchen sink"\n\n🚨 Emergency? Call NOW for immediate assistance: ${PHONE}`;
+    return `✅ Service: ${sName}\n\nPlease send EVERYTHING in ONE message:\n• 👤 ${nameFieldEn}\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description of the problem\n\nExample:\n${exampleEn}\n\n🚨 Emergency? Call NOW for immediate assistance: ${PHONE}`;
   }
-  return `✅ Servicio: ${sName}\n\nPor favor envía TODO en UN solo mensaje:\n• 👤 Nombre completo\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Descripción breve del problema\n\nEjemplo:\n"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"\n\n🚨 ¿Emergencia? Llama AHORA para atención inmediata: ${PHONE}`;
+  return `✅ Servicio: ${sName}\n\nPor favor envía TODO en UN solo mensaje:\n• 👤 ${nameFieldEs}\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Descripción breve del problema\n\nEjemplo:\n${exampleEs}\n\n🚨 ¿Emergencia? Llama AHORA para atención inmediata: ${PHONE}`;
 }
 
 function askSchedule(lang) {
