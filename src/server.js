@@ -60,7 +60,7 @@ function detectIntent(text) {
   return null;
 }
 
-// NUEVO: Generador dinámico para HOY o MAÑANA (Ajustado domingo a las 10am)
+// Generador dinámico para HOY o MAÑANA (Ajustado domingo a las 10am)
 async function getEmergencySlots(forTomorrow = false) {
   const prTime = new Date(new Date().toLocaleString("en-US", {timeZone: "America/Puerto_Rico"}));
   if (forTomorrow) prTime.setDate(prTime.getDate() + 1); // Adelanta un día si se le pide
@@ -136,7 +136,7 @@ function askSchedule(lang) {
   return lang === 'en' ? `📅 Do you want to schedule an appointment now?\n\nReply YES or NO\n\n🚨 Emergency? Call now: ${PHONE}` : `📅 ¿Quieres agendar una cita ahora?\n\nResponde SI o NO\n\n🚨 ¿Emergencia? Llama ahora: ${PHONE}`;
 }
 
-// NUEVO: Formateador adaptado a HOY, MAÑANA o Fecha Regular
+// Formateador adaptado a HOY, MAÑANA o Fecha Regular
 function formatSlots(lang, slots) { 
   const lines = [lang === 'en' ? `📅 Available slots:` : `📅 Horarios disponibles:`, '']; 
   for (let i = 0; i < slots.length; i++) { 
@@ -198,7 +198,12 @@ const handler = async (req, res) => {
     if (intent && !isHello(body)) {
       session.step = 'menu';
     } else {
-      session.step = 'menu';
+      // LA CURA: WIPE DE MEMORIA PARA GENERAR UN CASO NUEVO 
+      session = { 
+        lang: session.lang, // Recuerda el idioma
+        step: 'menu', 
+        case_id: `DP-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}-${Math.floor(1000+Math.random()*9000)}` 
+      };
       await db.run('INSERT OR REPLACE INTO sessions (k, v, updated_at) VALUES (?, ?, ?)', key, JSON.stringify(session), Date.now());
       return res.type('text/xml').send(`<?xml version="1.0" encoding="UTF-8"?><Response><Message>${menuText(session.lang)}</Message></Response>`);
     }
