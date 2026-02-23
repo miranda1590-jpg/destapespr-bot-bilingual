@@ -95,9 +95,15 @@ async function getEmergencySlots(forTomorrow = false) {
 
 function menuText(lang) {
   if (lang === 'en') {
-    return `👋 Welcome to DestapesPR.\n\nChoose a number or type what you need:\n1️⃣ Drain cleaning (clogged pipes)\n2️⃣ Water leak (drips / leaks)\n3️⃣ Camera inspection (video)\n4️⃣ Water heater (gas/electric/solar)\n5️⃣ Other plumbing service\n6️⃣ Appointment / schedule a visit\n\n💬 Commands: "start", "menu" or "back"\n🌐 Type "español" to switch language\n\n📘 Facebook: ${FB_LINK}\n📞 Phone: ${PHONE}`;
+    return `👋 Welcome to DestapesPR.\n\nChoose a number or type what you need:\n1️⃣ Drain cleaning (clogged pipes)\n2️⃣ Water leak (drips / leaks)\n3️⃣ Camera inspection (video)\n4️⃣ Water heater (gas/electric/solar)\n5️⃣ Other plumbing service\n6️⃣ Appointment / Estimate visit ($80)\n\n💬 Commands: "start", "menu" or "back"\n🌐 Type "español" to switch language\n\n📘 Facebook: ${FB_LINK}\n📞 Phone: ${PHONE}`;
   }
-  return `👋 Bienvenido a DestapesPR.\n\nSelecciona un número o escribe lo que necesitas:\n1️⃣ Destape (drenajes o tuberías tapadas)\n2️⃣ Fuga de agua (goteos / filtraciones)\n3️⃣ Inspección con cámara (video)\n4️⃣ Calentador (gas/eléctrico/solar)\n5️⃣ Otro servicio de plomería\n6️⃣ Cita / coordinar visita\n\n💬 Comandos: "inicio", "menu" o "volver"\n🌐 Escribe "english" para cambiar idioma\n\n📘 Facebook: ${FB_LINK}\n📞 Tel: ${PHONE}`;
+  return `👋 Bienvenido a DestapesPR.\n\nSelecciona un número o escribe lo que necesitas:\n1️⃣ Destape (drenajes o tuberías tapadas)\n2️⃣ Fuga de agua (goteos / filtraciones)\n3️⃣ Inspección con cámara (video)\n4️⃣ Calentador (gas/eléctrico/solar)\n5️⃣ Otro servicio de plomería\n6️⃣ Cita / Visita para estimado ($80)\n\n💬 Comandos: "inicio", "menu" o "volver"\n🌐 Escribe "english" para cambiar idioma\n\n📘 Facebook: ${FB_LINK}\n📞 Tel: ${PHONE}`;
+}
+
+// NUEVO SUBMENÚ: Cotización vs Agendar
+function actionMenuText(lang) {
+  if (lang === 'en') return `🛠️ Do you want to schedule the service directly or do you need a visit for an estimate?\n\n1️⃣ Schedule Service\n2️⃣ Visit for Estimate ($80)\n\nReply with 1 or 2.`;
+  return `🛠️ ¿Deseas agendar el servicio o necesitas una visita para cotización/estimado?\n\n1️⃣ Agendar Servicio\n2️⃣ Visita para Cotización ($80)\n\nResponde con 1 o 2.`;
 }
 
 function propertyMenuText(lang) {
@@ -117,31 +123,15 @@ function heaterMenuText(lang) {
   return `🔥 Por favor selecciona el tipo de calentador:\n\n1️⃣ Solar\n2️⃣ De gas\n3️⃣ Eléctrico / De línea\n\nResponde con un número (1-3) o escribe "menu" para regresar.`;
 }
 
-// 🎯 ESTÉTICA DINÁMICA: Cambia ejemplo y campos según Residencial/Comercial
-function leadPrompt(service, lang, propertyType) {
-  const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, cita: { es: 'Cita', en: 'Appointment' }, otro: { es: 'Otro', en: 'Other' }, precio: { es: 'Estimado / Visita', en: 'Estimate / Visit' }, emergencia: { es: 'Emergencia', en: 'Emergency' } };
+// ACTUALIZADO CON $80 PARA COTIZACIONES
+function leadPrompt(service, lang, propertyType, jobIntent) {
+  const names = { destape: { es: 'Destape', en: 'Drain cleaning' }, fuga: { es: 'Fuga de agua', en: 'Water leak' }, camara: { es: 'Inspección con cámara', en: 'Camera inspection' }, calentador: { es: 'Calentador', en: 'Water heater' }, cita: { es: 'Cita', en: 'Appointment' }, otro: { es: 'Otro', en: 'Other' }, precio: { es: 'Visita para Estimado', en: 'Estimate Visit' }, emergencia: { es: 'Emergencia', en: 'Emergency' } };
   const sName = names[service]?.[lang] || names['otro'][lang];
   
   const isComercial = (propertyType === 'Commercial' || propertyType === 'Comercial');
   const nameFieldEs = isComercial ? 'Nombre / Nombre del negocio' : 'Nombre completo';
   const nameFieldEn = isComercial ? 'Name / Business name' : 'Full name';
   
-  if (service === 'emergencia') {
-    const price = isComercial ? '$350' : '$250';
-    if (lang === 'en') {
-      return `🚨 Service: ${sName}\n\n⚠️ Emergency services for this property type have an initial cost of ${price}.\n\nTo assist you immediately, please send EVERYTHING in ONE message:\n• 👤 ${nameFieldEn}\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the emergency\n\n🚨 Emergency? Call NOW: ${PHONE}`;
-    }
-    return `🚨 Servicio: ${sName}\n\n⚠️ Las emergencias para este tipo de propiedad tienen un costo inicial de ${price} dólares.\n\nPara atenderte lo más pronto posible, envía TODO en UN solo mensaje:\n• 👤 ${nameFieldEs}\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción de la emergencia\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
-  }
-
-  if (service === 'precio') {
-    if (lang === 'en') {
-      return `✅ Service: ${sName}\n\n💵 For costs and estimates, please tell us the service needed and send photos of the area.\n\n🛠️ If you want us to visit you, the evaluation visit has a cost of $80 (which is deducted from the final cost of any service performed).\n\nTo schedule your visit, please send EVERYTHING in ONE message:\n• 👤 ${nameFieldEn}\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the problem\n\n🚨 Emergency? Call NOW: ${PHONE}`;
-    }
-    return `✅ Servicio: ${sName}\n\n💵 Para costo y/o estimados de servicios, déjanos un mensaje con el servicio a estimar y fotos del área a trabajar.\n\n🛠️ Si deseas que lo visitemos, la visita tiene un costo de $80 dólares (que se deducen del costo de cualquier servicio que se realice).\n\nPara agendar tu visita, envía TODO en UN solo mensaje:\n• 👤 ${nameFieldEs}\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción del problema\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
-  }
-
-  // Textos de ejemplo dinámicos
   const exampleEn = isComercial 
     ? '"Restaurant El Sabor, 939-555-1111, San Juan, clogged main drain in the kitchen"'
     : '"My name is Ana Rivera, 939-555-9999, San Juan, clogged kitchen sink"';
@@ -150,6 +140,23 @@ function leadPrompt(service, lang, propertyType) {
     ? '"Panadería El Sabor, 939-555-1111, San Juan, tubería principal tapada en la cocina"'
     : '"Me llamo Ana Rivera, 939-555-9999, Caguas, fregadero de cocina tapado"';
 
+  if (service === 'emergencia') {
+    const price = isComercial ? '$350' : '$250';
+    if (lang === 'en') {
+      return `🚨 Service: ${sName}\n\n⚠️ Emergency services for this property type have an initial cost of ${price}.\n\nTo assist you immediately, please send EVERYTHING in ONE message:\n• 👤 ${nameFieldEn}\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the emergency\n\n🚨 Emergency? Call NOW: ${PHONE}`;
+    }
+    return `🚨 Servicio: ${sName}\n\n⚠️ Las emergencias para este tipo de propiedad tienen un costo inicial de ${price} dólares.\n\nPara atenderte lo más pronto posible, envía TODO en UN solo mensaje:\n• 👤 ${nameFieldEs}\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción de la emergencia\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
+  }
+
+  // SI PIDIÓ COTIZACIÓN O MARCÓ LA OPCIÓN DE CITA ($80)
+  if (jobIntent === 'cotizacion' || service === 'cita' || service === 'precio') {
+    if (lang === 'en') {
+      return `✅ Service: ${sName}\n\n💵 Evaluation visits and estimates have a cost of $80 (which is deducted from the final cost if the service is performed).\n\nTo schedule your visit, please send EVERYTHING in ONE message:\n• 👤 ${nameFieldEn}\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Photos / Description of the problem\n\nExample:\n${exampleEn}\n\n🚨 Emergency? Call NOW: ${PHONE}`;
+    }
+    return `✅ Servicio: ${sName}\n\n💵 Las visitas para evaluación y estimados tienen un costo de $80 dólares (que se deducen del costo final si apruebas el trabajo).\n\nPara agendar tu visita, envía TODO en UN solo mensaje:\n• 👤 ${nameFieldEs}\n• 📞 Número de contacto\n• 📍 Municipio / zona / sector\n• 📝 Fotos / Descripción del problema\n\nEjemplo:\n${exampleEs}\n\n🚨 ¿Emergencia? Llama AHORA: ${PHONE}`;
+  }
+
+  // SI SOLO ESTÁ AGENDANDO UN SERVICIO REGULAR
   if (lang === 'en') {
     return `✅ Service: ${sName}\n\nPlease send EVERYTHING in ONE message:\n• 👤 ${nameFieldEn}\n• 📞 Contact number\n• 📍 City / area / sector\n• 📝 Short description of the problem\n\nExample:\n${exampleEn}\n\n🚨 Emergency? Call NOW for immediate assistance: ${PHONE}`;
   }
@@ -217,7 +224,7 @@ const handler = async (req, res) => {
   const intent = detectIntent(lower);
   const isAnswering = ['si', 'sí', 'yes', 'y', 's', '1', '2', '3', '4', '5', '6'].includes(lower);
 
-  if (isHello(body) || (intent && session.step !== 'lead' && session.step !== 'heater_type' && session.step !== 'property_type' && session.step !== 'residential_type' && session.step !== 'menu' && !isAnswering)) {
+  if (isHello(body) || (intent && session.step !== 'lead' && session.step !== 'heater_type' && session.step !== 'property_type' && session.step !== 'residential_type' && session.step !== 'ask_intent' && session.step !== 'menu' && !isAnswering)) {
     if (intent && !isHello(body)) {
       session.step = 'menu';
     } else {
@@ -235,23 +242,46 @@ const handler = async (req, res) => {
 
   if (session.step === 'menu') {
     const choices = { '1':'destape', '2':'fuga', '3':'camara', '4':'calentador', '5':'otro', '6':'cita' };
-    const serviceLabels = { 'destape':'Drain cleaning', 'fuga':'Water leak', 'camara':'Camera inspection', 'calentador':'Water heater', 'otro':'Other', 'cita':'Appointment', 'precio':'Estimate / Visit', 'emergencia':'Emergency' };
-    const serviceLabelsEs = { 'destape':'Destape', 'fuga':'Fuga de agua', 'camara':'Inspección con cámara', 'calentador':'Calentador', 'otro':'Otro', 'cita':'Cita', 'precio':'Estimado / Visita', 'emergencia':'Emergencia' };
+    const serviceLabels = { 'destape':'Drain cleaning', 'fuga':'Water leak', 'camara':'Camera inspection', 'calentador':'Water heater', 'otro':'Other', 'cita':'Estimate Visit ($80)', 'precio':'Estimate Visit ($80)', 'emergencia':'Emergency' };
+    const serviceLabelsEs = { 'destape':'Destape', 'fuga':'Fuga de agua', 'camara':'Inspección con cámara', 'calentador':'Calentador', 'otro':'Otro', 'cita':'Visita para Estimado ($80)', 'precio':'Visita para Estimado ($80)', 'emergencia':'Emergencia' };
 
     const selectedService = choices[body] || intent;
 
     if (selectedService) {
       session.service = selectedService;
       session.service_label = session.lang === 'en' ? serviceLabels[session.service] : serviceLabelsEs[session.service];
-      
       session.case_id = `DP-${new Date().toISOString().replace(/[-:T]/g, '').slice(0, 8)}-${Math.floor(1000+Math.random()*9000)}`;
       
-      session.step = 'property_type';
-      responseMsg = propertyMenuText(session.lang);
+      // LÓGICA DE COTIZACIÓN vs DIRECTO
+      if (session.service === 'emergencia' || session.service === 'cita' || session.service === 'precio') {
+        session.job_intent = (session.service === 'emergencia') ? 'emergencia' : 'cotizacion';
+        session.step = 'property_type';
+        responseMsg = propertyMenuText(session.lang);
+      } else {
+        session.step = 'ask_intent';
+        responseMsg = actionMenuText(session.lang);
+      }
     } else {
       responseMsg = menuText(session.lang);
     }
   } 
+  else if (session.step === 'ask_intent') {
+    const isService = ['1', 'servicio', 'service', 'agendar'].some(w => lower.includes(w));
+    const isQuote = ['2', 'cotizacion', 'estimado', 'visita', 'quote', 'estimate'].some(w => lower.includes(w));
+
+    if (isService || lower === '1') {
+        session.job_intent = 'servicio';
+        session.step = 'property_type';
+        responseMsg = propertyMenuText(session.lang);
+    } else if (isQuote || lower === '2') {
+        session.job_intent = 'cotizacion';
+        session.service_label += session.lang === 'en' ? ' (Estimate)' : ' (Cotización)';
+        session.step = 'property_type';
+        responseMsg = propertyMenuText(session.lang);
+    } else {
+        responseMsg = actionMenuText(session.lang);
+    }
+  }
   else if (session.step === 'property_type') {
     const isComercial = ['2', 'comercial', 'commercial'].some(w => lower.includes(w));
     const isResidencial = ['1', 'residencial', 'residential'].some(w => lower.includes(w));
@@ -265,7 +295,7 @@ const handler = async (req, res) => {
             responseMsg = heaterMenuText(session.lang);
         } else {
             session.step = 'lead';
-            responseMsg = leadPrompt(session.service, session.lang, session.property_type);
+            responseMsg = leadPrompt(session.service, session.lang, session.property_type, session.job_intent);
         }
     } else if (isResidencial || lower === '1') {
         session.property_type = session.lang === 'en' ? 'Residential' : 'Residencial';
@@ -288,7 +318,7 @@ const handler = async (req, res) => {
             responseMsg = heaterMenuText(session.lang);
         } else {
             session.step = 'lead';
-            responseMsg = leadPrompt(session.service, session.lang, session.property_type);
+            responseMsg = leadPrompt(session.service, session.lang, session.property_type, session.job_intent);
         }
     } else {
         responseMsg = residentialMenuText(session.lang);
@@ -302,7 +332,7 @@ const handler = async (req, res) => {
       session.heater_type = session.lang === 'en' ? heaterTypesEn[body] : heaterTypes[body];
       session.service_label = `${session.service_label} [${session.heater_type}]`;
       session.step = 'lead';
-      responseMsg = leadPrompt(session.service, session.lang, session.property_type);
+      responseMsg = leadPrompt(session.service, session.lang, session.property_type, session.job_intent);
     } else {
       responseMsg = heaterMenuText(session.lang);
     }
